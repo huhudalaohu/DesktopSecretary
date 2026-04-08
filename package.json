@@ -1,0 +1,26 @@
+{
+  "name": "desktop-secretary",
+  "version": "1.0.0",
+  "description": "A glassmorphism desktop assistant pinned to the right side of your screen",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "concurrently \"vite\" \"electron .\"",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "electron-store": "^8.2.0",
+    "lucide-react": "^0.469.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.1.2",
+    "electron": "^30.5.1",
+    "postcss": "^8.4.49",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^3.4.17",
+    "vite": "^6.1.0"
+  }
+}

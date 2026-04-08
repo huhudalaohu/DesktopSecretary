@@ -1,0 +1,39 @@
+/* Tailwind 指令 */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 全局基础样式 */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  /* 毛玻璃背景 */
+  background: transparent;
+  font-family: system-ui, -apple-system, sans-serif;
+  color: #fff;
+}
+
+/* 自定义滚动条 — 半透明风格，适配毛玻璃界面 */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+/* 防止文字被选中（桌面组件体验） */
+* {
+  user-select: none;
+}
