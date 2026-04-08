@@ -461,7 +461,7 @@ export default function AIAssistant() {
 
   return (
     <div>
-      <div className="text-[10px] text-white/30 uppercase tracking-wider mb-2">AI 助手</div>
+      <div className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2">AI 助手</div>
 
       <div className="rounded-xl bg-white/5 border border-white/10 p-3 space-y-3">
         {/* 截图加待办按钮 */}

@@ -15,22 +15,22 @@
  * 毛玻璃容器: bg-slate-900/80 + backdrop-blur(20px)
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import WorkspaceSwitcher from './components/WorkspaceSwitcher';
 import FileNavigator from './components/FileNavigator';
 import TodoList from './components/TodoList';
 import AIAssistant from './components/AIAssistant';
+import QuickLinks from './components/QuickLinks';
 import { X } from 'lucide-react';
 
 const api = window.desktopAPI;
 
 export default function App() {
-  // 当前选中的工作区 ID
   const [activeWorkspace, setActiveWorkspace] = useState('project-a');
-  // 工作区列表
   const [workspaces, setWorkspaces] = useState([]);
+  // 宽度百分比（占屏幕宽度），默认 20%
+  const [widthPercent, setWidthPercent] = useState(20);
 
-  // 启动时从 electron-store 加载工作区列表
   useEffect(() => {
     api.storeGet('workspaces', []).then((ws) => {
       if (ws.length > 0) {
@@ -38,9 +38,13 @@ export default function App() {
         setActiveWorkspace(ws[0].id);
       }
     });
+    // 加载保存的宽度百分比
+    api.storeGet('windowWidthPercent', 20).then((pct) => {
+      setWidthPercent(pct);
+      applyWidth(pct);
+    });
   }, []);
 
-  // 添加新工作区
   const addWorkspace = async (name) => {
     const id = `ws-${Date.now()}`;
     const updated = [...workspaces, { id, name }];
@@ -49,8 +53,20 @@ export default function App() {
     await api.storeSet('workspaces', updated);
   };
 
+  const applyWidth = useCallback(async (pct) => {
+    const screenW = window.screen.width;
+    const pixelWidth = Math.round(screenW * pct / 100);
+    await api.resizeWindow(pixelWidth);
+  }, []);
+
+  const handleWidthChange = useCallback(async (e) => {
+    const pct = parseInt(e.target.value, 10);
+    setWidthPercent(pct);
+    await api.storeSet('windowWidthPercent', pct);
+    applyWidth(pct);
+  }, [applyWidth]);
+
   return (
-    // 毛玻璃外层容器
     <div className="h-full flex flex-col bg-slate-900/80 backdrop-blur-[20px] rounded-2xl border border-white/10 overflow-hidden">
       {/* 标题栏区域 */}
       <div className="flex items-center justify-between px-4 py-2 drag-region">
@@ -75,6 +91,9 @@ export default function App() {
 
       {/* 模块区域 — 可滚动 */}
       <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-4">
+        {/* 快速入口 */}
+        <QuickLinks />
+
         {/* 文件导航 */}
         <FileNavigator activeWorkspace={activeWorkspace} />
 
@@ -83,6 +102,23 @@ export default function App() {
 
         {/* AI 助手 */}
         <AIAssistant />
+      </div>
+
+      {/* 底部宽度调节条 */}
+      <div className="flex items-center gap-2 px-4 py-1.5 border-t border-white/5">
+        <span className="text-[10px] text-white/25 flex-shrink-0">宽度</span>
+        <input
+          type="range"
+          min="15"
+          max="35"
+          value={widthPercent}
+          onChange={handleWidthChange}
+          className="flex-1 h-1 appearance-none bg-white/10 rounded-full cursor-pointer
+            [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
+            [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white/50
+            [&::-webkit-slider-thumb]:hover:bg-white/70 [&::-webkit-slider-thumb]:transition-colors"
+        />
+        <span className="text-[10px] text-white/35 flex-shrink-0 w-8 text-right">{widthPercent}%</span>
       </div>
     </div>
   );

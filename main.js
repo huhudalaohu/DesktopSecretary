@@ -25,6 +25,8 @@ const { app, BrowserWindow, screen, ipcMain, shell, desktopCapturer, dialog, glo
 const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
+const https = require('https');
+const http = require('http');
 
 // electron-store 使用 dynamic import（v8+ 为 ESM-only）
 let Store;
@@ -58,6 +60,8 @@ async function initStore() {
       pinnedFolders: [],
       recentFolders: [],
       todos: {},
+      quickLinks: {},
+      linkCache: {},
       aiSettings: {
         provider: 'kimi',
         apiKey: '',
@@ -357,6 +361,221 @@ function registerIpcHandlers() {
   ipcMain.handle('close-app', () => {
     app.quit();
   });
+
+  /** resize-window — 调整窗口宽度（右边缘固定，左边缘扩展） */
+  ipcMain.handle('resize-window', (_event, newWidth) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const minW = 280;
+    const maxW = 600;
+    const w = Math.max(minW, Math.min(maxW, newWidth));
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width: sw, height: sh } = primaryDisplay.workAreaSize;
+    const { x: sx, y: sy } = primaryDisplay.workArea;
+    // 先设置位置（右边缘对齐），再改尺寸，避免中间态溢出
+    mainWindow.setPosition(sx + sw - w, sy);
+    mainWindow.setSize(w, sh);
+    return w;
+  });
+
+  /** get-window-width — 获取当前窗口宽度 */
+  ipcMain.handle('get-window-width', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return 350;
+    return mainWindow.getSize()[0];
+  });
+
+  /** open-external — 在默认浏览器中打开外部链接 */
+  ipcMain.handle('open-external', async (_event, url) => {
+    try {
+      await shell.openExternal(url);
+    } catch (err) {
+      console.error('[OpenExternal] 打开链接失败:', err);
+    }
+  });
+
+  /** fetch-link-preview — 主进程抓取网页 OG 元数据（无 CORS 限制，3s 硬超时） */
+  ipcMain.handle('fetch-link-preview', async (_event, url) => {
+    // 检查缓存
+    const cacheKey = require('crypto').createHash('md5').update(url).digest('hex');
+    const cached = store.get(`linkCache.${cacheKey}`, null);
+    if (cached && (Date.now() - cached.timestamp < 24 * 60 * 60 * 1000)) {
+      return { ...cached, cached: true };
+    }
+
+    // 3秒硬超时保护
+    const timeoutResult = { title: null, favicon: null, description: null, source: 'timeout', error: 'TIMEOUT' };
+    try {
+      const result = await Promise.race([
+        fetchPage(url),
+        new Promise((resolve) => setTimeout(() => resolve(timeoutResult), 3000)),
+      ]);
+
+      // 写入缓存
+      if (result.title && !result.error) {
+        const cacheEntry = { ...result, timestamp: Date.now() };
+        store.set(`linkCache.${cacheKey}`, cacheEntry);
+      }
+
+      return result;
+    } catch {
+      return timeoutResult;
+    }
+  });
+
+  /**
+   * 抓取网页并解析 OG 元数据
+   * 返回 { title, favicon, description, source, error? }
+   */
+  function fetchPage(url) {
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        req.destroy();
+        resolve({ title: null, favicon: null, description: null, source: 'timeout', error: 'TIMEOUT' });
+      }, 3000);
+
+      const mod = url.startsWith('https') ? https : http;
+      const req = mod.get(url, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+        },
+        timeout: 2000,
+      }, (res) => {
+        // 跟随重定向
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          clearTimeout(timeout);
+          res.destroy();
+          const redirectUrl = new URL(res.headers.location, url).href;
+          fetchPage(redirectUrl).then(resolve);
+          return;
+        }
+
+        // 错误状态处理
+        if (res.statusCode === 401 || res.statusCode === 403) {
+          clearTimeout(timeout);
+          res.destroy();
+          resolve({ title: null, favicon: null, description: null, source: 'error', error: 'need_login' });
+          return;
+        }
+        if (res.statusCode === 404) {
+          clearTimeout(timeout);
+          res.destroy();
+          resolve({ title: null, favicon: null, description: null, source: 'error', error: 'not_found' });
+          return;
+        }
+        if (res.statusCode !== 200) {
+          clearTimeout(timeout);
+          res.destroy();
+          resolve({ title: null, favicon: null, description: null, source: 'error', error: `http_${res.statusCode}` });
+          return;
+        }
+
+        let data = '';
+        let received = 0;
+        res.on('data', (chunk) => {
+          received += chunk.length;
+          data += chunk.toString();
+          // 只读前 10KB，拿到 <head> 就够了
+          if (received > 10240) {
+            res.destroy();
+          }
+        });
+        res.on('end', () => {
+          clearTimeout(timeout);
+
+          // 反爬检测：HTML 太短且含验证码关键词
+          if (data.length < 500 && /验证|captcha|verify/i.test(data)) {
+            resolve({ title: null, favicon: null, description: null, source: 'error', error: 'captcha' });
+            return;
+          }
+
+          const meta = parseMeta(data, url);
+          resolve(meta);
+        });
+        res.on('error', () => {
+          clearTimeout(timeout);
+          resolve({ title: null, favicon: null, description: null, source: 'error' });
+        });
+      });
+      req.on('error', () => {
+        clearTimeout(timeout);
+        resolve({ title: null, favicon: null, description: null, source: 'error' });
+      });
+      req.on('timeout', () => {
+        req.destroy();
+        clearTimeout(timeout);
+        resolve({ title: null, favicon: null, description: null, source: 'error' });
+      });
+    });
+  }
+
+  /** 解析 HTML 中的 OG 元标签 */
+  function parseMeta(html, baseUrl) {
+    // 优先级：og:title > twitter:title > <title>
+    let title = null;
+
+    const ogTitle = html.match(/<meta[^>]*property\s*=\s*["']og:title["'][^>]*content\s*=\s*["']([^"']+)["']/i)
+      || html.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*property\s*=\s*["']og:title["']/i);
+    if (ogTitle) {
+      title = decodeHtml(ogTitle[1]);
+    }
+
+    if (!title) {
+      const twitterTitle = html.match(/<meta[^>]*name\s*=\s*["']twitter:title["'][^>]*content\s*=\s*["']([^"']+)["']/i)
+        || html.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*name\s*=\s*["']twitter:title["']/i);
+      if (twitterTitle) {
+        title = decodeHtml(twitterTitle[1]);
+      }
+    }
+
+    if (!title) {
+      const titleTag = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      if (titleTag && titleTag[1].trim()) {
+        title = decodeHtml(titleTag[1].trim());
+      }
+    }
+
+    // og:image
+    let favicon = null;
+    const ogImage = html.match(/<meta[^>]*property\s*=\s*["']og:image["'][^>]*content\s*=\s*["']([^"']+)["']/i)
+      || html.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*property\s*=\s*["']og:image["']/i);
+    if (ogImage) {
+      favicon = ogImage[1];
+    }
+
+    // <link rel="icon">
+    if (!favicon) {
+      const linkIcon = html.match(/<link[^>]*rel\s*=\s*["'](?:shortcut )?icon["'][^>]*href\s*=\s*["']([^"']+)["']/i);
+      if (linkIcon) {
+        favicon = new URL(linkIcon[1], baseUrl).href;
+      }
+    }
+
+    // og:description
+    let description = null;
+    const ogDesc = html.match(/<meta[^>]*property\s*=\s*["']og:description["'][^>]*content\s*=\s*["']([^"']+)["']/i)
+      || html.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*property\s*=\s*["']og:description["']/i);
+    if (ogDesc) {
+      description = decodeHtml(ogDesc[1]);
+    }
+
+    const source = title ? 'og-meta' : 'error';
+    return { title, favicon, description, source };
+  }
+
+  /** 解码 HTML 实体 */
+  function decodeHtml(str) {
+    return str
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&#x27;/g, "'")
+      .replace(/&nbsp;/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
 
   /**
    * register-shortcut — 注册全局快捷键

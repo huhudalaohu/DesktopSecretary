@@ -163,9 +163,11 @@ export default function TodoList({ activeWorkspace }) {
 
   return (
     <div onClick={closeContextMenu} onContextMenu={(e) => e.preventDefault()}>
-      {/* ===== 标题 + 筛选栏 ===== */}
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-[10px] text-white/30 uppercase tracking-wider">待办</div>
+      <div className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2">待办</div>
+
+      <div className="rounded-xl bg-white/5 border border-white/10 p-3">
+        {/* ===== 筛选栏 ===== */}
+        <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-1">
           <ListFilter size={10} className="text-white/20" />
           {/* 状态筛选 */}
@@ -345,6 +347,7 @@ export default function TodoList({ activeWorkspace }) {
           ))}
         </div>
       )}
+      </div>
     </div>
   );
 }

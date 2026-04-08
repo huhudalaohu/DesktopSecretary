@@ -107,7 +107,10 @@ export default function FileNavigator({ activeWorkspace }) {
 
   return (
     <div onClick={closeContextMenu}>
-      {/* ========== 置顶区域 ========== */}
+      <div className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2">文件导航</div>
+
+      <div className="rounded-xl bg-white/5 border border-white/10 p-3">
+        {/* ========== 置顶区域 ========== */}
       <div className="mb-3">
         <div className="text-[10px] text-white/30 uppercase tracking-wider mb-2">置顶</div>
         {pinned.length === 0 ? (
@@ -200,6 +203,7 @@ export default function FileNavigator({ activeWorkspace }) {
           )}
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -56,6 +56,18 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   /** 关闭应用 */
   closeApp: () => ipcRenderer.invoke('close-app'),
 
+  /** 调整窗口宽度 */
+  resizeWindow: (width) => ipcRenderer.invoke('resize-window', width),
+
+  /** 获取当前窗口宽度 */
+  getWindowWidth: () => ipcRenderer.invoke('get-window-width'),
+
+  /** 在默认浏览器中打开外部链接 */
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+
+  /** 主进程抓取网页 OG 元数据（无 CORS 限制，2s 超时，24h 缓存） */
+  fetchLinkPreview: (url) => ipcRenderer.invoke('fetch-link-preview', url),
+
   // ========== 全局快捷键 ==========
 
   /**
