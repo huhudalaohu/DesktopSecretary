@@ -166,12 +166,13 @@ function collapseDock(reason) {
 }
 
 /**
- * 安排延迟收起
+ * 安排延迟收起（幂等：如果已经在计时，不重复启动）
  */
 function scheduleCollapse(reason) {
   if (dockPinned || dockInteracting) return;
-  clearTimeout(dockHideTimer);
+  if (dockHideTimer) return; // 已经在倒计时中，不重置
   dockHideTimer = setTimeout(() => {
+    dockHideTimer = null;
     if (!dockPinned && !dockInteracting) {
       collapseDock(reason);
     }
@@ -182,34 +183,59 @@ function scheduleCollapse(reason) {
  * 鼠标位置检测循环（主进程轮询）
  */
 function startDockMouseTracking() {
+  let lastInZone = false;
   dockMouseTimer = setInterval(() => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
 
     const cursor = screen.getCursorScreenPoint();
     const bounds = mainWindow.getBounds();
 
-    // 检测鼠标是否在窗口范围内
-    const inWindow = (
-      cursor.x >= bounds.x &&
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const { width: sw, height: sh } = primaryDisplay.size;
+    const { x: bx, y: by } = primaryDisplay.bounds;
+    const sf = primaryDisplay.scaleFactor;
+    const screenRightEdge = bx + sw;
+
+    // 鼠标在屏幕右边缘热区
+    const inHotZone = (
+      cursor.x >= screenRightEdge - DOCK_HOT_ZONE_WIDTH &&
+      cursor.x <= screenRightEdge &&
+      cursor.y >= bounds.y &&
+      cursor.y <= bounds.y + bounds.height
+    );
+
+    // 展开态：只在窗口右边缘 50px 内保持展开
+    const inExpandedKeepZone = dockExpanded && (
+      cursor.x >= bounds.x + bounds.width - 50 &&
       cursor.x <= bounds.x + bounds.width &&
       cursor.y >= bounds.y &&
       cursor.y <= bounds.y + bounds.height
     );
 
-    if (inWindow) {
+    const inZone = inHotZone || inExpandedKeepZone;
+
+    if (inZone) {
       if (!dockExpanded) {
-        // 鼠标在收起态的细边区域，展开
         expandDock('鼠标进入热区');
       }
-      // 鼠标在窗口内，取消任何待定的收起
       clearTimeout(dockHideTimer);
-    } else if (dockExpanded) {
-      // 鼠标离开窗口，宽限期过后安排收起
+      dockHideTimer = null;
+    } else if (dockExpanded && !dockPinned) {
       if (!dockGraceTimer) {
         scheduleCollapse('鼠标离开窗口');
       }
     }
-  }, 80); // 80ms 轮询，平衡响应和 CPU
+
+    // 每 2 秒输出一次调试信息（不管状态有没有变）
+    if (Date.now() % 2000 < 100) {
+      console.log(`[Dock Debug] cursor=(${cursor.x},${cursor.y}) rightEdge=${screenRightEdge} sw=${sw} sf=${sf} bounds=(${bounds.x},${bounds.y},${bounds.width}x${bounds.height}) inHotZone=${inHotZone} inExpandedKeepZone=${inExpandedKeepZone} inZone=${inZone} expanded=${dockExpanded} pinned=${dockPinned} grace=${!!dockGraceTimer} hideTimer=${!!dockHideTimer}`);
+    }
+
+    if (inZone !== lastInZone) {
+      console.log(`[Dock] ${inZone ? '进入' : '离开'}热区, cursor=(${cursor.x},${cursor.y}), rightEdge=${screenRightEdge}, bounds=(${bounds.x},${bounds.y},${bounds.width}x${bounds.height})`);
+      lastInZone = inZone;
+    }
+  }, 80);
 }
 
 /**
