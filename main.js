@@ -196,23 +196,23 @@ function startDockMouseTracking() {
     const sf = primaryDisplay.scaleFactor;
     const screenRightEdge = bx + sw;
 
-    // 鼠标在屏幕右边缘热区
-    const inHotZone = (
+    // 鼠标在屏幕右边缘热区（细边态：触发展开）
+    const inHotZone = !dockExpanded && (
       cursor.x >= screenRightEdge - DOCK_HOT_ZONE_WIDTH &&
       cursor.x <= screenRightEdge &&
       cursor.y >= bounds.y &&
       cursor.y <= bounds.y + bounds.height
     );
 
-    // 展开态：只在窗口右边缘 50px 内保持展开
-    const inExpandedKeepZone = dockExpanded && (
-      cursor.x >= bounds.x + bounds.width - 50 &&
-      cursor.x <= bounds.x + bounds.width &&
-      cursor.y >= bounds.y &&
-      cursor.y <= bounds.y + bounds.height
+    // 展开态：检测鼠标是否在窗口范围内（外扩 20px 缓冲）
+    const inExpandedWindow = dockExpanded && (
+      cursor.x >= bounds.x - 20 &&
+      cursor.x <= bounds.x + bounds.width + 20 &&
+      cursor.y >= bounds.y - 20 &&
+      cursor.y <= bounds.y + bounds.height + 20
     );
 
-    const inZone = inHotZone || inExpandedKeepZone;
+    const inZone = inHotZone || inExpandedWindow;
 
     if (inZone) {
       if (!dockExpanded) {
@@ -228,7 +228,7 @@ function startDockMouseTracking() {
 
     // 每 2 秒输出一次调试信息（不管状态有没有变）
     if (Date.now() % 2000 < 100) {
-      console.log(`[Dock Debug] cursor=(${cursor.x},${cursor.y}) rightEdge=${screenRightEdge} sw=${sw} sf=${sf} bounds=(${bounds.x},${bounds.y},${bounds.width}x${bounds.height}) inHotZone=${inHotZone} inExpandedKeepZone=${inExpandedKeepZone} inZone=${inZone} expanded=${dockExpanded} pinned=${dockPinned} grace=${!!dockGraceTimer} hideTimer=${!!dockHideTimer}`);
+      console.log(`[Dock Debug] cursor=(${cursor.x},${cursor.y}) rightEdge=${screenRightEdge} sw=${sw} bounds=(${bounds.x},${bounds.y},${bounds.width}x${bounds.height}) inHotZone=${inHotZone} inExpandedWindow=${inExpandedWindow} inZone=${inZone} expanded=${dockExpanded} pinned=${dockPinned} grace=${!!dockGraceTimer} hideTimer=${!!dockHideTimer}`);
     }
 
     if (inZone !== lastInZone) {
