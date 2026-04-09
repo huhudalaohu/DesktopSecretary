@@ -588,9 +588,12 @@ export default function AIAssistant() {
 
         setScreenshotStatus(SCREENSHOT_STATUS.SUCCESS);
         setStatusMessage(`已创建待办: ${newTodo.text}`);
+        // 截图识别完成，展开 Dock 5 秒后自动收起
+        api.dockExpand(5000);
       } else {
         setScreenshotStatus(SCREENSHOT_STATUS.SUCCESS);
         setStatusMessage('未识别到待办事项，请尝试文字更清晰的截图');
+        api.dockExpand(5000);
       }
     } catch (err) {
       setScreenshotStatus(SCREENSHOT_STATUS.ERROR);

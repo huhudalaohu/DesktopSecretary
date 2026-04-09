@@ -136,4 +136,31 @@ contextBridge.exposeInMainWorld('desktopAPI', {
    * @returns {Promise<{success}>}
    */
   screenshotCancel: () => ipcRenderer.invoke('screenshot:cancel'),
+
+  // ========== Dock 控制 ==========
+
+  /** 锁定展开状态 */
+  dockPin: () => ipcRenderer.invoke('dock:pin'),
+
+  /** 解锁 */
+  dockUnpin: () => ipcRenderer.invoke('dock:unpin'),
+
+  /** 切换锁定 */
+  dockTogglePin: () => ipcRenderer.invoke('dock:toggle-pin'),
+
+  /** 手动展开，可选延时后自动收起 */
+  dockExpand: (delay) => ipcRenderer.invoke('dock:expand', delay),
+
+  /** 通知正在交互（输入/滚动/点击） */
+  dockSetInteracting: (interacting) => ipcRenderer.invoke('dock:set-interacting', interacting),
+
+  /** 获取 Dock 状态 */
+  dockGetState: () => ipcRenderer.invoke('dock:get-state'),
+
+  /** 监听 Dock 状态变化 */
+  onDockStateChanged: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('dock:state-changed', handler);
+    return () => ipcRenderer.removeListener('dock:state-changed', handler);
+  },
 });

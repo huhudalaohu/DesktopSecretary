@@ -40,6 +40,21 @@ let overlayWindow = null;
 let screenshotResolve = null;  // Promise resolve 函数，等待用户操作后回调
 let capturedScreenshot = null; // desktopCapturer 返回的 NativeImage 源，用于裁剪
 
+// ========== QQ 式 Dock 自动隐藏 ==========
+const DOCK_EDGE_WIDTH = 6;       // 贴边时露出的细边宽度(px)
+const DOCK_EXPANDED_WIDTH = 350; // 展开时的宽度(px)
+const DOCK_HEIGHT_RATIO = 0.85;  // 高度占屏幕比例
+const DOCK_HOT_ZONE_WIDTH = 20;  // 触发热区宽度(px)，鼠标进入此区域触发展开
+const DOCK_HIDE_DELAY = 1500;    // 缩回延迟(ms)
+const DOCK_GRACE_PERIOD = 500;   // 展开后的宽限期(ms)，期间不检测离开
+
+let dockExpanded = false;        // 当前是否展开
+let dockPinned = false;          // 是否锁定展开
+let dockHideTimer = null;        // 缩回定时器
+let dockGraceTimer = null;       // 宽限期定时器
+let dockMouseTimer = null;       // 鼠标检测定时器
+let dockInteracting = false;     // 用户是否正在窗口内交互（滚动/输入/点击）
+
 // 当前注册的快捷键
 let registeredShortcut = null;
 
@@ -81,29 +96,142 @@ async function initStore() {
 /**
  * 将窗口定位到主屏幕右侧，高度占满工作区
  */
-function positionWindow(win) {
+/**
+ * 将窗口定位到 Dock 位置（贴边或展开）
+ */
+function positionDockWindow(expanded) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width: sw, height: sh } = primaryDisplay.size;
+  const { x: bx, y: by } = primaryDisplay.bounds;
 
-  const winWidth = Math.round(sw / 4);
-  const winHeight = Math.round(sh * 0.85);
-  win.setSize(winWidth, winHeight);
-  win.center();
+  const w = expanded ? DOCK_EXPANDED_WIDTH : DOCK_EDGE_WIDTH;
+  const h = Math.round(sh * DOCK_HEIGHT_RATIO);
+
+  mainWindow.setBounds({
+    x: bx + sw - w,
+    y: by + Math.round((sh - h) / 2),
+    width: w,
+    height: h,
+  }, true); // animate = true for smooth transition on some platforms
 }
 
 /**
- * 创建主窗口
+ * 展开 Dock
+ */
+function expandDock(reason) {
+  if (dockExpanded) return;
+  console.log(`[Dock] 展开 (${reason})`);
+  dockExpanded = true;
+  clearTimeout(dockHideTimer);
+  clearTimeout(dockGraceTimer);
+
+  // 启用窗口交互
+  mainWindow.setIgnoreMouseEvents(false);
+  positionDockWindow(true);
+  mainWindow.show();
+  mainWindow.focus();
+
+  // 宽限期：展开后一段时间内不检测离开
+  dockGraceTimer = setTimeout(() => {
+    dockGraceTimer = null;
+  }, DOCK_GRACE_PERIOD);
+
+  // 通知渲染进程切换样式
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('dock:state-changed', { expanded: true });
+  }
+}
+
+/**
+ * 收起 Dock
+ */
+function collapseDock(reason) {
+  if (!dockExpanded || dockPinned || dockInteracting) return;
+  console.log(`[Dock] 收起 (${reason})`);
+  dockExpanded = false;
+  clearTimeout(dockHideTimer);
+
+  // 通知渲染进程
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('dock:state-changed', { expanded: false });
+  }
+
+  // 延迟缩小窗口（等动画结束后再 resize）
+  setTimeout(() => {
+    if (!dockExpanded && mainWindow && !mainWindow.isDestroyed()) {
+      positionDockWindow(false);
+    }
+  }, 250);
+}
+
+/**
+ * 安排延迟收起
+ */
+function scheduleCollapse(reason) {
+  if (dockPinned || dockInteracting) return;
+  clearTimeout(dockHideTimer);
+  dockHideTimer = setTimeout(() => {
+    if (!dockPinned && !dockInteracting) {
+      collapseDock(reason);
+    }
+  }, DOCK_HIDE_DELAY);
+}
+
+/**
+ * 鼠标位置检测循环（主进程轮询）
+ */
+function startDockMouseTracking() {
+  dockMouseTimer = setInterval(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    const cursor = screen.getCursorScreenPoint();
+    const bounds = mainWindow.getBounds();
+
+    // 检测鼠标是否在窗口范围内
+    const inWindow = (
+      cursor.x >= bounds.x &&
+      cursor.x <= bounds.x + bounds.width &&
+      cursor.y >= bounds.y &&
+      cursor.y <= bounds.y + bounds.height
+    );
+
+    if (inWindow) {
+      if (!dockExpanded) {
+        // 鼠标在收起态的细边区域，展开
+        expandDock('鼠标进入热区');
+      }
+      // 鼠标在窗口内，取消任何待定的收起
+      clearTimeout(dockHideTimer);
+    } else if (dockExpanded) {
+      // 鼠标离开窗口，宽限期过后安排收起
+      if (!dockGraceTimer) {
+        scheduleCollapse('鼠标离开窗口');
+      }
+    }
+  }, 80); // 80ms 轮询，平衡响应和 CPU
+}
+
+/**
+ * 创建主窗口（Dock 模式）
  */
 function createWindow() {
+  const primaryDisplay = screen.getPrimaryDisplay();
+  const { width: sw, height: sh } = primaryDisplay.size;
+  const { x: bx, y: by } = primaryDisplay.bounds;
+  const h = Math.round(sh * DOCK_HEIGHT_RATIO);
+
   mainWindow = new BrowserWindow({
-    width: 350,
-    height: 800,
+    x: bx + sw - DOCK_EDGE_WIDTH,
+    y: by + Math.round((sh - h) / 2),
+    width: DOCK_EDGE_WIDTH,
+    height: h,
     frame: false,
     transparent: false,
     resizable: false,
     movable: false,
     skipTaskbar: true,
-    alwaysOnTop: false,
+    alwaysOnTop: true,
     hasShadow: false,
     backgroundColor: '#0f172a',
     webPreferences: {
@@ -124,15 +252,15 @@ function createWindow() {
     console.error('Window failed to load:', code, desc);
   });
   mainWindow.on('closed', () => {
+    clearInterval(dockMouseTimer);
+    clearTimeout(dockHideTimer);
+    clearTimeout(dockGraceTimer);
     console.log('Window closed');
     mainWindow = null;
   });
 
-  positionWindow(mainWindow);
-
-  screen.on('display-metrics-changed', () => positionWindow(mainWindow));
-  screen.on('display-added', () => positionWindow(mainWindow));
-  screen.on('display-removed', () => positionWindow(mainWindow));
+  // 启动鼠标位置检测
+  startDockMouseTracking();
 }
 
 /**
@@ -608,14 +736,17 @@ function registerIpcHandlers() {
     const minW = 280;
     const maxW = 600;
     const w = Math.max(minW, Math.min(maxW, newWidth));
+    // Dock 模式下：展开窗口并调整宽度
+    if (!dockExpanded) expandDock('resize-window');
     const primaryDisplay = screen.getPrimaryDisplay();
     const { width: sw, height: sh } = primaryDisplay.size;
     const { x: bx, y: by } = primaryDisplay.bounds;
+    const h = Math.round(sh * DOCK_HEIGHT_RATIO);
     mainWindow.setBounds({
       x: bx + sw - w,
-      y: by,
+      y: by + Math.round((sh - h) / 2),
       width: w,
-      height: sh,
+      height: h,
     });
     return w;
   });
@@ -931,9 +1062,57 @@ function registerIpcHandlers() {
     }
     return { success: true };
   });
-}
 
-// ========== 应用生命周期 ==========
+  // ========== Dock 控制 IPC ==========
+
+  /** dock:pin — 锁定展开状态 */
+  ipcMain.handle('dock:pin', () => {
+    dockPinned = true;
+    console.log('[Dock] 已锁定');
+    return { success: true };
+  });
+
+  /** dock:unpin — 解锁，允许自动收起 */
+  ipcMain.handle('dock:unpin', () => {
+    dockPinned = false;
+    console.log('[Dock] 已解锁');
+    scheduleCollapse('用户解锁');
+    return { success: true };
+  });
+
+  /** dock:toggle-pin — 切换锁定 */
+  ipcMain.handle('dock:toggle-pin', () => {
+    dockPinned = !dockPinned;
+    console.log(`[Dock] 锁定状态: ${dockPinned}`);
+    if (!dockPinned) scheduleCollapse('用户解锁');
+    return { pinned: dockPinned };
+  });
+
+  /** dock:expand — 手动展开（外部调用，如截图完成后） */
+  ipcMain.handle('dock:expand', (_event, delay) => {
+    expandDock('外部请求');
+    if (delay && delay > 0) {
+      scheduleCollapse(`延时${delay}ms后收起`);
+    }
+    return { success: true };
+  });
+
+  /** dock:set-interacting — 渲染进程通知正在交互 */
+  ipcMain.handle('dock:set-interacting', (_event, interacting) => {
+    dockInteracting = interacting;
+    if (interacting) {
+      clearTimeout(dockHideTimer);
+    } else {
+      scheduleCollapse('交互结束');
+    }
+    return { success: true };
+  });
+
+  /** dock:get-state — 获取当前 Dock 状态 */
+  ipcMain.handle('dock:get-state', () => {
+    return { expanded: dockExpanded, pinned: dockPinned };
+  });
+}
 
 app.whenReady().then(async () => {
   try {

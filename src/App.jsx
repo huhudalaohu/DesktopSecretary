@@ -20,7 +20,7 @@ import FileNavigator from './components/FileNavigator';
 import TodoList from './components/TodoList';
 import AIAssistant from './components/AIAssistant';
 import QuickLinks from './components/QuickLinks';
-import { X } from 'lucide-react';
+import { X, Pin, PinOff } from 'lucide-react';
 
 const api = window.desktopAPI;
 
@@ -29,6 +29,9 @@ export default function App() {
   const [workspaces, setWorkspaces] = useState([]);
   // 宽度百分比（占屏幕宽度），默认 20%
   const [widthPercent, setWidthPercent] = useState(20);
+  // Dock 锁定状态
+  const [docked, setDocked] = useState(true);
+  const [pinned, setPinned] = useState(false);
 
   useEffect(() => {
     api.storeGet('workspaces', []).then((ws) => {
@@ -40,8 +43,24 @@ export default function App() {
     // 加载保存的宽度百分比
     api.storeGet('windowWidthPercent', 20).then((pct) => {
       setWidthPercent(pct);
-      applyWidth(pct);
     });
+
+    // 监听 Dock 状态变化
+    const cleanup = api.onDockStateChanged((data) => {
+      setDocked(data.expanded);
+    });
+    return cleanup;
+  }, []);
+
+  // 通知主进程用户正在交互（输入/滚动/点击）
+  const handleInteraction = useCallback((interacting) => {
+    api.dockSetInteracting(interacting);
+  }, []);
+
+  // 切换图钉锁定
+  const handleTogglePin = useCallback(async () => {
+    const result = await api.dockTogglePin();
+    setPinned(result.pinned);
   }, []);
 
   const addWorkspace = async (name) => {
@@ -85,16 +104,34 @@ export default function App() {
   }, [applyWidth]);
 
   return (
-    <div className="h-full flex flex-col bg-slate-900/80 backdrop-blur-[20px] rounded-2xl border border-white/10 overflow-hidden">
+    <div
+      className="h-full flex flex-col bg-slate-900/80 backdrop-blur-[20px] rounded-2xl border border-white/10 overflow-hidden"
+      onMouseEnter={() => handleInteraction(true)}
+      onMouseLeave={() => handleInteraction(false)}
+    >
       {/* 标题栏区域 */}
       <div className="flex items-center justify-between px-4 py-2 drag-region">
         <span className="text-sm font-medium text-white/70">DesktopSecretary</span>
-        <button
-          onClick={() => api.closeApp()}
-          className="p-1 rounded hover:bg-white/10 transition-colors text-white/50 hover:text-white"
-        >
-          <X size={14} />
-        </button>
+        <div className="flex items-center gap-1">
+          {/* 图钉按钮 */}
+          <button
+            onClick={handleTogglePin}
+            className={`p-1 rounded transition-colors ${
+              pinned
+                ? 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30'
+                : 'hover:bg-white/10 text-white/30 hover:text-white/60'
+            }`}
+            title={pinned ? '取消固定' : '固定窗口'}
+          >
+            {pinned ? <Pin size={14} /> : <PinOff size={14} />}
+          </button>
+          <button
+            onClick={() => api.closeApp()}
+            className="p-1 rounded hover:bg-white/10 transition-colors text-white/50 hover:text-white"
+          >
+            <X size={14} />
+          </button>
+        </div>
       </div>
 
       {/* 待办列表 — 最高级别，固定在顶部，不受工作区切换影响 */}
@@ -115,7 +152,10 @@ export default function App() {
       </div>
 
       {/* 模块区域 — 可滚动 */}
-      <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-4">
+      <div
+        className="flex-1 overflow-y-auto px-4 pb-4 space-y-4"
+        onScroll={() => handleInteraction(true)}
+      >
         {/* 快速入口 */}
         <QuickLinks activeWorkspace={activeWorkspace} />
 

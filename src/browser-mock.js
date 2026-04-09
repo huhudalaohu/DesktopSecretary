@@ -117,6 +117,13 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
     onScreenshotStart: () => () => {},
     screenshotCrop: () => resolve({ success: false }),
     screenshotCancel: () => resolve({ success: true }),
+    dockPin: () => resolve({ success: true }),
+    dockUnpin: () => resolve({ success: true }),
+    dockTogglePin: () => resolve({ pinned: false }),
+    dockExpand: () => resolve({ success: true }),
+    dockSetInteracting: () => resolve({ success: true }),
+    dockGetState: () => resolve({ expanded: true, pinned: false }),
+    onDockStateChanged: () => () => {},
   };
 
   console.log('[BrowserMock] desktopAPI mock loaded');
