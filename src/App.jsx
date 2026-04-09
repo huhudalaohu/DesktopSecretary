@@ -52,11 +52,6 @@ export default function App() {
     return cleanup;
   }, []);
 
-  // 通知主进程用户正在交互（输入/滚动/点击）
-  const handleInteraction = useCallback((interacting) => {
-    api.dockSetInteracting(interacting);
-  }, []);
-
   // 切换图钉锁定
   const handleTogglePin = useCallback(async () => {
     const result = await api.dockTogglePin();
@@ -106,8 +101,6 @@ export default function App() {
   return (
     <div
       className="h-full flex flex-col bg-slate-900/80 backdrop-blur-[20px] rounded-2xl border border-white/10 overflow-hidden"
-      onMouseEnter={() => handleInteraction(true)}
-      onMouseLeave={() => handleInteraction(false)}
     >
       {/* 标题栏区域 */}
       <div className="flex items-center justify-between px-4 py-2 drag-region">
@@ -154,7 +147,6 @@ export default function App() {
       {/* 模块区域 — 可滚动 */}
       <div
         className="flex-1 overflow-y-auto px-4 pb-4 space-y-4"
-        onScroll={() => handleInteraction(true)}
       >
         {/* 快速入口 */}
         <QuickLinks activeWorkspace={activeWorkspace} />
