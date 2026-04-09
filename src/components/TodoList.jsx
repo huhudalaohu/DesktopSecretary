@@ -51,52 +51,67 @@ function parsePriorityPrefix(raw) {
  * 同优先级内按 id（时间戳）倒序，新的在前
  */
 function sortByPriority(todos) {
-  return [...todos].sort((a, b) => {
-    const diff = PRIORITY_CONFIG[a.priority || 'medium'].order - PRIORITY_CONFIG[b.priority || 'medium'].order;
-    if (diff !== 0) return diff;
-    // 同优先级按创建时间倒序（id 格式: todo-时间戳）
-    return b.id.localeCompare(a.id);
-  });
+  return todos
+    .filter((t) => t && t.id)
+    .sort((a, b) => {
+      const pA = PRIORITY_CONFIG[a.priority || 'medium'];
+      const pB = PRIORITY_CONFIG[b.priority || 'medium'];
+      if (!pA || !pB) return 0;
+      const diff = pA.order - pB.order;
+      if (diff !== 0) return diff;
+      return String(b.id).localeCompare(String(a.id));
+    });
 }
 
 /**
- * 数据迁移：确保每条待办都有 priority 字段
+ * 数据迁移：确保每条待办都有完整字段
  */
 function migrateTodos(todos) {
-  return todos.map((t) => ({ ...t, priority: t.priority || 'medium' }));
+  if (!Array.isArray(todos)) return [];
+  return todos
+    .filter((t) => t && typeof t === 'object' && t.id)
+    .map((t) => ({
+      id: t.id,
+      text: t.text || '',
+      done: !!t.done,
+      priority: PRIORITY_CONFIG[t.priority] ? t.priority : 'medium',
+    }));
 }
 
-export default function TodoList({ activeWorkspace }) {
-  const [allTodos, setAllTodos] = useState({});       // 所有待办 { workspaceId: [...] }
+export default function TodoList() {
+  const [todos, setTodos] = useState([]);              // 全局待办列表
   const [input, setInput] = useState('');              // 输入框内容
   const [statusFilter, setStatusFilter] = useState('all');  // 状态筛选: all | active | completed
   const [priorityFilter, setPriorityFilter] = useState('all'); // 优先级筛选: all | urgent | high | medium | low
   const [priorityPicker, setPriorityPicker] = useState(null);  // 选择中的优先级（输入框旁圆点）
   const [contextMenu, setContextMenu] = useState(null);  // 右键菜单 {x, y, todo}
 
-  // 加载待办数据
+  // 加载待办数据（全局，不区分工作区）
   useEffect(() => {
-    api.storeGet('todos', {}).then((data) => {
-      // 迁移旧数据：确保每条都有 priority
-      const migrated = {};
-      for (const [ws, todos] of Object.entries(data)) {
-        migrated[ws] = migrateTodos(todos);
-      }
-      setAllTodos(migrated);
-    });
+    const loadTodos = () => {
+      api.storeGet('todosGlobal', []).then((data) => {
+        setTodos(migrateTodos(data));
+      });
+    };
+    loadTodos();
+
+    // 监听其他组件（如 AIAssistant）创建待办后的通知
+    const handler = () => loadTodos();
+    window.addEventListener('todos-updated', handler);
+    return () => window.removeEventListener('todos-updated', handler);
   }, []);
 
   // 保存到 electron-store
   const saveTodos = async (updated) => {
-    setAllTodos(updated);
-    await api.storeSet('todos', updated);
+    setTodos(updated);
+    await api.storeSet('todosGlobal', updated);
   };
 
-  // 当前工作区的待办列表（已排序）
-  const currentTodos = sortByPriority(allTodos[activeWorkspace] || []);
+  // 排序后的待办列表
+  const sortedTodos = sortByPriority(todos);
 
   // 筛选后的列表
-  const filteredTodos = currentTodos.filter((t) => {
+  const filteredTodos = sortedTodos.filter((t) => {
     // 状态筛选
     if (statusFilter === 'active' && t.done) return false;
     if (statusFilter === 'completed' && !t.done) return false;
@@ -118,35 +133,30 @@ export default function TodoList({ activeWorkspace }) {
     if (!text) return;
 
     const newTodo = { id: `todo-${Date.now()}`, text, done: false, priority };
-    const workspaceTodos = [...(allTodos[activeWorkspace] || []), newTodo];
-    const updated = { ...allTodos, [activeWorkspace]: workspaceTodos };
-    await saveTodos(updated);
+    await saveTodos([...todos, newTodo]);
     setInput('');
     setPriorityPicker(null);
   };
 
   // 切换完成状态
   const toggleTodo = async (id) => {
-    const workspaceTodos = (allTodos[activeWorkspace] || []).map((t) =>
+    const updated = todos.map((t) =>
       t.id === id ? { ...t, done: !t.done } : t
     );
-    const updated = { ...allTodos, [activeWorkspace]: workspaceTodos };
     await saveTodos(updated);
   };
 
   // 删除待办
   const removeTodo = async (id) => {
-    const workspaceTodos = (allTodos[activeWorkspace] || []).filter((t) => t.id !== id);
-    const updated = { ...allTodos, [activeWorkspace]: workspaceTodos };
+    const updated = todos.filter((t) => t.id !== id);
     await saveTodos(updated);
   };
 
   // 修改优先级
   const changePriority = async (id, newPriority) => {
-    const workspaceTodos = (allTodos[activeWorkspace] || []).map((t) =>
+    const updated = todos.map((t) =>
       t.id === id ? { ...t, priority: newPriority } : t
     );
-    const updated = { ...allTodos, [activeWorkspace]: workspaceTodos };
     await saveTodos(updated);
     setContextMenu(null);
   };
@@ -266,7 +276,7 @@ export default function TodoList({ activeWorkspace }) {
           {statusFilter === 'all' && priorityFilter === 'all' ? '暂无待办' : '没有符合条件的待办'}
         </div>
       ) : (
-        <div className="space-y-1">
+        <div className="space-y-1 max-h-[196px] overflow-y-auto">
           {filteredTodos.map((todo) => {
             const pc = PRIORITY_CONFIG[todo.priority || 'medium'];
             return (

@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   // ========== 文件操作 ==========
 
   /** 用系统默认方式打开文件夹，并自动记录到 recentFolders */
-  openFolder: (folderPath) => ipcRenderer.invoke('open-folder', folderPath),
+  openFolder: (folderPath, storeKey) => ipcRenderer.invoke('open-folder', folderPath, storeKey),
 
   /** 扫描桌面目录，返回最近修改的文件列表 */
   getDesktopFiles: () => ipcRenderer.invoke('get-desktop-files'),
@@ -93,4 +93,47 @@ contextBridge.exposeInMainWorld('desktopAPI', {
     ipcRenderer.on('shortcut-triggered', handler);
     return () => ipcRenderer.removeListener('shortcut-triggered', handler);
   },
+
+  // ========== 截图 overlay ==========
+
+  /**
+   * 启动截图 overlay 流程（隐藏主窗口、截屏、显示 overlay，等待用户操作）
+   * @returns {Promise<string>} 裁剪后的 dataUrl
+   */
+  startScreenshotOverlay: () => ipcRenderer.invoke('start-screenshot-overlay'),
+
+  /**
+   * 监听截图 overlay 数据推送（仅 overlay 窗口使用）
+   * @param {Function} callback — 接收 {dataUrl, windowRect, virtualBounds, primaryDisplay}
+   * @returns {Function} 取消监听的函数
+   */
+  onScreenshotStart: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('screenshot:start', handler);
+    return () => ipcRenderer.removeListener('screenshot:start', handler);
+  },
+
+  /**
+   * 监听异步更新的前台窗口矩形（overlay 窗口使用）
+   * @param {Function} callback — 接收 windowRect
+   * @returns {Function} 取消监听的函数
+   */
+  onScreenshotUpdateWindowRect: (callback) => {
+    const handler = (_event, rect) => callback(rect);
+    ipcRenderer.on('screenshot:update-window-rect', handler);
+    return () => ipcRenderer.removeListener('screenshot:update-window-rect', handler);
+  },
+
+  /**
+   * 发送截图裁剪坐标到主进程
+   * @param {Object} rect — {x, y, width, height} 虚拟屏幕坐标
+   * @returns {Promise<{success, dataUrl?, error?}>}
+   */
+  screenshotCrop: (rect) => ipcRenderer.invoke('screenshot:crop', rect),
+
+  /**
+   * 取消截图 overlay
+   * @returns {Promise<{success}>}
+   */
+  screenshotCancel: () => ipcRenderer.invoke('screenshot:cancel'),
 });

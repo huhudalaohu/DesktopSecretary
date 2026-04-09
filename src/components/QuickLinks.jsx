@@ -267,7 +267,7 @@ function SkeletonBar() {
   return <div className="h-3 bg-white/10 rounded animate-pulse" style={{ width: '60%' }} />;
 }
 
-export default function QuickLinks() {
+export default function QuickLinks({ activeWorkspace }) {
   const [groups, setGroups] = useState(null);
   const [addingStatus, setAddingStatus] = useState('');
   const [contextMenu, setContextMenu] = useState(null);
@@ -283,25 +283,34 @@ export default function QuickLinks() {
   const timersRef = useRef({}); // linkId → interval
   const cancelledRef = useRef(new Set()); // 已取消的 linkId
 
+  // 存储键按工作区分隔
+  const storeKey = `quickLinks:${activeWorkspace}`;
+
   useEffect(() => {
-    api.storeGet('quickLinks', {}).then((saved) => {
+    // 切换工作区时清理定时器和状态
+    Object.values(timersRef.current).forEach(clearInterval);
+    timersRef.current = {};
+    cancelledRef.current = new Set();
+    setLoadingIds(new Set());
+    setCountdowns({});
+
+    api.storeGet(storeKey, {}).then((saved) => {
       if (!saved || Object.keys(saved).length === 0) {
         setGroups(DEFAULT_GROUPS);
-        api.storeSet('quickLinks', DEFAULT_GROUPS);
+        api.storeSet(storeKey, DEFAULT_GROUPS);
       } else {
         setGroups(saved);
       }
     });
     return () => {
-      // 清理所有定时器
       Object.values(timersRef.current).forEach(clearInterval);
     };
-  }, []);
+  }, [storeKey]);
 
   const saveGroups = useCallback(async (updated) => {
     setGroups(updated);
-    await api.storeSet('quickLinks', updated);
-  }, []);
+    await api.storeSet(storeKey, updated);
+  }, [storeKey]);
 
   useEffect(() => {
     const handler = (e) => {
@@ -385,7 +394,7 @@ export default function QuickLinks() {
       };
     });
     // 异步保存
-    api.storeGet('quickLinks', {}).then((latest) => {
+    api.storeGet(storeKey, {}).then((latest) => {
       if (!latest || !latest[groupId]) return;
       const updated = {
         ...latest,
@@ -394,7 +403,7 @@ export default function QuickLinks() {
           links: latest[groupId].links.map((l) => l.id === tempId ? { ...l, ...finalData } : l),
         },
       };
-      api.storeSet('quickLinks', updated);
+      api.storeSet(storeKey, updated);
     });
   };
 
@@ -449,7 +458,7 @@ export default function QuickLinks() {
       ...groups,
       [groupId]: { ...groups[groupId], expanded: true, links: [...(groups[groupId]?.links || []), tempLink] },
     };
-    setGroups(updatedWithTemp);
+    await saveGroups(updatedWithTemp);
     setAddingStatus('fetching');
     startCountdown(tempId);
 

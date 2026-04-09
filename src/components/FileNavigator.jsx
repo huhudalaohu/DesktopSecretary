@@ -39,18 +39,22 @@ export default function FileNavigator({ activeWorkspace }) {
   const [recent, setRecent] = useState([]);     // 最近访问列表
   const [contextMenu, setContextMenu] = useState(null); // 右键菜单 {x, y, type, item}
 
-  // 加载数据
+  // 存储键按工作区分隔
+  const pinnedKey = `pinnedFolders:${activeWorkspace}`;
+  const recentKey = `recentFolders:${activeWorkspace}`;
+
+  // 加载数据（切换工作区时重新加载）
   useEffect(() => {
-    api.storeGet('pinnedFolders', []).then(setPinned);
-    api.storeGet('recentFolders', []).then(setRecent);
-  }, []);
+    api.storeGet(pinnedKey, []).then(setPinned);
+    api.storeGet(recentKey, []).then(setRecent);
+  }, [pinnedKey, recentKey]);
 
   // 打开文件夹并刷新最近访问
   const handleOpenFolder = async (folderPath) => {
-    await api.openFolder(folderPath);
+    await api.openFolder(folderPath, recentKey);
     // 稍作延迟后刷新 recentFolders（主进程已写入）
     setTimeout(() => {
-      api.storeGet('recentFolders', []).then(setRecent);
+      api.storeGet(recentKey, []).then(setRecent);
     }, 300);
   };
 
@@ -65,7 +69,7 @@ export default function FileNavigator({ activeWorkspace }) {
     const alias = folderPath.replace(/\\/g, '/').split('/').pop() || folderPath;
     const updated = [...pinned, { id: `pin-${Date.now()}`, path: folderPath, alias }];
     setPinned(updated);
-    await api.storeSet('pinnedFolders', updated);
+    await api.storeSet(pinnedKey, updated);
     setContextMenu(null);
   };
 
@@ -73,7 +77,7 @@ export default function FileNavigator({ activeWorkspace }) {
   const handleUnpin = async (id) => {
     const updated = pinned.filter((p) => p.id !== id);
     setPinned(updated);
-    await api.storeSet('pinnedFolders', updated);
+    await api.storeSet(pinnedKey, updated);
     setContextMenu(null);
   };
 
@@ -81,7 +85,7 @@ export default function FileNavigator({ activeWorkspace }) {
   const handleRemoveRecent = async (folderPath) => {
     const updated = recent.filter((r) => r.path !== folderPath);
     setRecent(updated);
-    await api.storeSet('recentFolders', updated);
+    await api.storeSet(recentKey, updated);
     setContextMenu(null);
   };
 
@@ -99,7 +103,7 @@ export default function FileNavigator({ activeWorkspace }) {
     const [moved] = updated.splice(sourceIndex, 1);
     updated.splice(targetIndex, 0, moved);
     setPinned(updated);
-    await api.storeSet('pinnedFolders', updated);
+    await api.storeSet(pinnedKey, updated);
   };
 
   // 关闭右键菜单
