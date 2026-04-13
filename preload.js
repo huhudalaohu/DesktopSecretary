@@ -137,6 +137,22 @@ contextBridge.exposeInMainWorld('desktopAPI', {
    */
   screenshotCancel: () => ipcRenderer.invoke('screenshot:cancel'),
 
+  /**
+   * 通知主进程 overlay 已加载好新截图（ready 握手）
+   */
+  screenshotReady: () => ipcRenderer.send('screenshot:ready'),
+
+  /**
+   * 监听截图重置信号（overlay 隐藏时清理旧状态）
+   * @param {Function} callback
+   * @returns {Function} 取消监听
+   */
+  onScreenshotReset: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('screenshot:reset', handler);
+    return () => ipcRenderer.removeListener('screenshot:reset', handler);
+  },
+
   // ========== Dock 控制 ==========
 
   /** 锁定展开状态 */

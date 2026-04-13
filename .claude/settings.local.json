@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx vite:*)",
+      "Bash(npx electron:*)",
+      "Bash(tasklist)",
+      "Bash(taskkill:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(npm run:*)",
+      "Bash(tasklist /FI \"IMAGENAME eq electron.exe\")",
+      "Bash(npm install:*)",
+      "Bash(curl -s http://127.0.0.1:4173/)",
+      "Bash(npm start:*)",
+      "Bash(node:*)",
+      "Bash(powershell:*)",
+      "Bash(taskkill //F //IM electron.exe)",
+      "Read(//tmp/**)",
+      "Bash(findstr electron:*)",
+      "Bash(npm -v)"
+    ]
+  }
+}

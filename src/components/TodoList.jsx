@@ -16,8 +16,8 @@
  *   - 旧数据兼容: 无 priority 字段时迁移为 'medium'
  */
 
-import React, { useState, useEffect } from 'react';
-import { Plus, Trash2, Check, ListFilter, ChevronDown } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Plus, Trash2, Check, ListFilter, ChevronDown, Pencil } from 'lucide-react';
 
 const api = window.desktopAPI;
 
@@ -85,6 +85,13 @@ export default function TodoList() {
   const [priorityFilter, setPriorityFilter] = useState('all'); // 优先级筛选: all | urgent | high | medium | low
   const [priorityPicker, setPriorityPicker] = useState(null);  // 选择中的优先级（输入框旁圆点）
   const [contextMenu, setContextMenu] = useState(null);  // 右键菜单 {x, y, todo}
+  const [editingId, setEditingId] = useState(null);        // 正在编辑的待办 id
+  const [editValue, setEditValue] = useState('');           // 编辑输入值
+
+  // Tooltip 状态
+  const [tooltip, setTooltip] = useState({ show: false, text: '', x: 0, y: 0 });
+  const tooltipTimer = useRef(null);
+  const todoTextRefs = useRef(new Map());
 
   // 加载待办数据（全局，不区分工作区）
   useEffect(() => {
@@ -101,7 +108,7 @@ export default function TodoList() {
     return () => window.removeEventListener('todos-updated', handler);
   }, []);
 
-  // 保存到 electron-store
+  // 保存到 electron-store（保留完整原文，显示层用 CSS 截断）
   const saveTodos = async (updated) => {
     setTodos(updated);
     await api.storeSet('todosGlobal', updated);
@@ -120,7 +127,7 @@ export default function TodoList() {
     return true;
   });
 
-  // 添加待办
+  // 添加待办（带50字限制）
   const addTodo = async () => {
     const raw = input.trim();
     if (!raw) return;
@@ -150,6 +157,17 @@ export default function TodoList() {
   const removeTodo = async (id) => {
     const updated = todos.filter((t) => t.id !== id);
     await saveTodos(updated);
+  };
+
+  // 确认编辑
+  const confirmEdit = async () => {
+    if (!editingId) return;
+    const text = editValue.trim();
+    if (!text) { setEditingId(null); return; }
+    const updated = todos.map((t) => t.id === editingId ? { ...t, text } : t);
+    await saveTodos(updated);
+    setEditingId(null);
+    setEditValue('');
   };
 
   // 修改优先级
@@ -313,26 +331,85 @@ export default function TodoList() {
                     {todo.done && <Check size={10} className="text-blue-300" />}
                   </button>
 
-                  {/* 文字 */}
-                  <span
-                    className={`flex-1 text-xs truncate transition-all ${
-                      todo.done ? 'line-through opacity-50 text-white/40' : 'text-white/80'
-                    }`}
-                  >
-                    {todo.text}
-                  </span>
+                  {/* 文字（带 tooltip）/ 编辑输入框 */}
+                  <div className="flex-1 min-w-0 overflow-hidden relative">
+                    {editingId === todo.id ? (
+                      <input
+                        autoFocus
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') confirmEdit();
+                          if (e.key === 'Escape') { setEditingId(null); setEditValue(''); }
+                        }}
+                        onBlur={confirmEdit}
+                        className="w-full text-xs bg-white/10 border border-blue-400/50 rounded px-1.5 py-0.5 text-white outline-none"
+                      />
+                    ) : (
+                      <span
+                        ref={el => { if (el) todoTextRefs.current.set(todo.id, el); }}
+                        onMouseEnter={(e) => {
+                          const el = todoTextRefs.current.get(todo.id);
+                          if (el && el.scrollWidth > el.clientWidth) {
+                            if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
+                            tooltipTimer.current = setTimeout(() => {
+                              const rect = el.getBoundingClientRect();
+                              setTooltip({
+                                show: true,
+                                text: todo.text,
+                                x: rect.left + rect.width / 2,
+                                y: rect.top - 8
+                              });
+                            }, 200);
+                          }
+                        }}
+                        onMouseLeave={() => {
+                          if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
+                          setTooltip(prev => ({ ...prev, show: false }));
+                        }}
+                        className={`block text-xs truncate transition-all cursor-default ${
+                          todo.done ? 'line-through opacity-50 text-white/40' : 'text-white/80'
+                        }`}
+                        title=""
+                      >
+                        {todo.text}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
+                {/* 编辑按钮 — 悬浮显示 */}
+                <button
+                  onClick={() => { setEditingId(todo.id); setEditValue(todo.text); }}
+                  className="flex-shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-white/10 text-white/30 hover:text-blue-400 transition-all"
+                >
+                  <Pencil size={12} />
+                </button>
                 {/* 删除按钮 — 悬浮显示 */}
                 <button
                   onClick={() => removeTodo(todo.id)}
-                  className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-white/10 text-white/30 hover:text-red-400 transition-all mr-1"
+                  className="flex-shrink-0 opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-white/10 text-white/30 hover:text-red-400 transition-all mr-1"
                 >
                   <Trash2 size={12} />
                 </button>
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* ===== Tooltip ===== */}
+      {tooltip.show && (
+        <div
+          className="fixed z-50 px-2 py-1 text-xs text-white bg-slate-800/95 border border-white/10 rounded shadow-xl pointer-events-none whitespace-nowrap"
+          style={{
+            left: tooltip.x,
+            top: tooltip.y,
+            transform: 'translate(-50%, -100%)'
+          }}
+        >
+          {tooltip.text}
+          <div className="absolute left-1/2 top-full -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-slate-800/95" />
         </div>
       )}
 

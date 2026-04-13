@@ -77,6 +77,12 @@ export default function App() {
     await api.storeSet('workspaces', updated);
   };
 
+  const renameWorkspace = async (id, newName) => {
+    const updated = workspaces.map((ws) => ws.id === id ? { ...ws, name: newName } : ws);
+    setWorkspaces(updated);
+    await api.storeSet('workspaces', updated);
+  };
+
   const reorderWorkspaces = async (fromIndex, toIndex) => {
     const updated = [...workspaces];
     const [moved] = updated.splice(fromIndex, 1);
@@ -100,7 +106,7 @@ export default function App() {
 
   return (
     <div
-      className="h-full flex flex-col bg-slate-900/80 backdrop-blur-[20px] rounded-2xl border border-white/10 overflow-hidden"
+      className="h-full flex flex-col bg-slate-900/60 backdrop-blur-[24px] rounded-2xl border border-white/10 overflow-hidden"
     >
       {/* 标题栏区域 */}
       <div className="flex items-center justify-between px-4 py-2 drag-region">
@@ -141,6 +147,7 @@ export default function App() {
           onAdd={addWorkspace}
           onDelete={deleteWorkspace}
           onReorder={reorderWorkspaces}
+          onRename={renameWorkspace}
         />
       </div>
 

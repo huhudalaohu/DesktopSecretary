@@ -16,7 +16,7 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ChevronRight, ChevronDown, Pencil, Trash2, GripVertical, Loader2, X } from 'lucide-react';
+import { ChevronRight, ChevronDown, Pencil, Trash2, GripVertical, Loader2, X, Circle } from 'lucide-react';
 
 const api = window.desktopAPI;
 
@@ -57,6 +57,15 @@ const DEFAULT_GROUPS = {
 };
 
 const GROUP_ORDER = ['feishu', 'tencent', 'oa', 'thirdParty', 'uncategorized'];
+
+// 分组色条颜色（用于左侧 2px 色条区分）
+const GROUP_ACCENT = {
+  feishu: 'bg-blue-400',
+  tencent: 'bg-green-400',
+  oa: 'bg-amber-400',
+  thirdParty: 'bg-purple-400',
+  uncategorized: 'bg-white/20',
+};
 
 // ===== 并发控制 =====
 const MAX_CONCURRENT = 2;
@@ -583,16 +592,16 @@ export default function QuickLinks({ activeWorkspace }) {
     <div>
       <div className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2">快速入口</div>
 
-      <div className="rounded-xl bg-white/5 border border-white/10 p-3">
+      <div className="rounded-xl bg-white/5 border border-white/10 p-2.5">
         {/* 快速添加输入框 */}
-        <div className="mb-3">
+        <div className="mb-2">
           <input
             ref={inputRef}
             type="text"
             placeholder="粘贴文档链接，自动识别分类"
             onPaste={handlePaste}
             onKeyDown={handleInputKeydown}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-xs text-white placeholder-white/25 outline-none focus:border-white/20 transition-colors"
+            className="w-full bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-white/25 outline-none focus:border-white/20 transition-colors"
           />
           {addingStatus === 'fetching' && (
             <div className="text-[10px] text-blue-400/70 mt-1 px-1">正在获取信息...</div>
@@ -607,26 +616,29 @@ export default function QuickLinks({ activeWorkspace }) {
           const group = groups[groupId];
           if (!group) return null;
           const linkCount = group.links.length;
+          const accent = GROUP_ACCENT[groupId] || GROUP_ACCENT.uncategorized;
 
           return (
-            <div key={groupId} className="mb-1">
+            <div key={groupId} className="mb-0.5">
+              {/* 紧凑分组标题：左侧色点 + 小字标签 + 箭头，hover 才显示完整背景 */}
               <div
                 onClick={() => toggleGroup(groupId)}
-                className="flex items-center gap-1.5 px-2 py-1.5 bg-white/5 hover:bg-white/10 rounded-lg cursor-pointer transition-colors select-none"
+                className="flex items-center gap-1 px-1.5 py-1 rounded hover:bg-white/5 cursor-pointer transition-colors select-none group/header"
               >
+                <span className={`w-1.5 h-1.5 rounded-full ${accent} flex-shrink-0`} />
                 {group.expanded ? (
-                  <ChevronDown size={16} className="text-gray-400 flex-shrink-0" />
+                  <ChevronDown size={11} className="text-white/20 flex-shrink-0" />
                 ) : (
-                  <ChevronRight size={16} className="text-gray-400 flex-shrink-0" />
+                  <ChevronRight size={11} className="text-white/20 flex-shrink-0" />
                 )}
-                <span className="text-[13px] font-semibold text-white flex-1 truncate">{group.name}</span>
-                <span className="text-[10px] text-white/25 flex-shrink-0">{linkCount}</span>
+                <span className="text-[10px] font-medium text-white/35 flex-1 truncate">{group.name}</span>
+                <span className="text-[9px] text-white/15 flex-shrink-0">{linkCount}</span>
               </div>
 
               {group.expanded && (
-                <div className="ml-4 mt-0.5">
+                <div className="ml-3 border-l border-white/[0.06]">
                   {linkCount === 0 ? (
-                    <div className="text-[10px] text-white/20 py-2 px-2">
+                    <div className="text-[10px] text-white/15 py-1 px-2 ml-1">
                       暂无快捷方式，粘贴链接即可添加
                     </div>
                   ) : (
@@ -648,7 +660,7 @@ export default function QuickLinks({ activeWorkspace }) {
                             e.preventDefault();
                             setContextMenu({ x: e.clientX, y: e.clientY, groupId, link });
                           }}
-                          className="group flex items-center gap-1.5 px-2 py-1 rounded hover:bg-white/5 transition-colors cursor-pointer relative"
+                          className="group flex items-center gap-1.5 px-1.5 py-[3px] rounded hover:bg-white/5 transition-colors cursor-pointer relative"
                           onDoubleClick={() => !isLoading && api.openExternal(link.url)}
                           title={link.url}
                         >

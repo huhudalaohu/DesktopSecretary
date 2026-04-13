@@ -86,14 +86,29 @@ const MODEL_PROVIDERS = {
       messages,
       max_tokens: 1024,
     }),
-    extractContent: (data) => data.choices?.[0]?.message?.content || '',
+    // 部分推理模型（如 mimo-v2-omni）将分析结果放在 reasoning_content 而非 content
+    extractContent: (data) => {
+      const msg = data.choices?.[0]?.message;
+      if (!msg) return '';
+      // 优先返回 content，为空时回退到 reasoning_content
+      return msg.content || msg.reasoning_content || '';
+    },
   },
 };
 
 const PROVIDER_KEYS = Object.keys(MODEL_PROVIDERS);
 
 // ========== Prompt 模板 ==========
-const SCREENSHOT_PROMPT = `请分析这张截图，提取其中的待办事项。如果是聊天、邮件或文档，提取：任务内容、截止时间、涉及人员、优先级。返回JSON格式：{tasks:[{title, deadline, priority, source}]}。如果没有明确待办，返回空数组。`;
+const SCREENSHOT_PROMPT = `请分析这张截图，提取待办事项。如果是聊天/邮件/文档：
+- 任务内容：提炼具体要做什么（不超过50字，过长时压缩为"动词+对象"核心结构）
+- 截止时间：如果有明确时间（如"周五下班前"），转换为 YYYY-MM-DD；模糊时间（如"尽快"）标注为"尽快"
+- 优先级：根据紧急程度标记 urgent/high/medium/low
+- 任务来源(sourcePerson)：指出发布/指派这个任务的人（聊天记录里的发送者、邮件发件人、文档中的@发起者）
+
+特别注意：不要提取"@金越虎"作为执行者，要提取的是说"@金越虎 把这个做了"的那个人（发布者）。
+
+返回 JSON 格式：{tasks: [{title, deadline, priority, sourcePerson}]}
+如果无法判断来源，sourcePerson 设为"待确认"。`;
 const MEMORY_SUMMARY_PROMPT = `请总结以下用户与AI的对话，提取关键信息（项目名称、待办、决策、文件路径），用于后续检索。摘要不超过100字，同时提取3-5个关键词。`;
 
 // ========== 截图工作流状态 ==========
@@ -513,6 +528,7 @@ export default function AIAssistant() {
       console.log('[AI Debug] choices 长度:', data.choices?.length);
       if (data.choices?.[0]) {
         console.log('[AI Debug] choices[0].message.content (前300字):', String(data.choices[0].message?.content || '').slice(0, 300));
+        console.log('[AI Debug] choices[0].message.reasoning_content (前300字):', String(data.choices[0].message?.reasoning_content || '').slice(0, 300));
       }
       // 打印其他可能的字段（部分 API 返回 result 而非 choices）
       if (data.result) console.log('[AI Debug] data.result:', String(data.result).slice(0, 300));
@@ -568,9 +584,13 @@ export default function AIAssistant() {
 
         // 只取第一个 task，确保一张截图只生成一条待办
         const firstTask = result.tasks[0];
+        // 构建待办文本，包含任务内容和交代任务的人
+        const assigner = firstTask.assigner || '';
+        const title = firstTask.title || '未识别标题';
+        const todoText = assigner ? `【${assigner}】${title}` : title;
         const newTodo = {
           id: `todo-${Date.now()}`,
-          text: firstTask.title || '未识别标题',
+          text: todoText,
           done: false,
           priority: firstTask.priority || 'medium',
         };
@@ -740,6 +760,7 @@ export default function AIAssistant() {
                       <div className="text-[10px] text-white/60 pl-2">
                         {task.priority === 'urgent' && <span className="text-red-400 mr-1">[紧急]</span>}
                         {task.priority === 'high' && <span className="text-orange-400 mr-1">[高]</span>}
+                        {task.assigner && <span className="text-blue-400 mr-1">【{task.assigner}】</span>}
                         {task.title}
                         {task.deadline && <span className="text-white/25 ml-1">截止: {task.deadline}</span>}
                       </div>

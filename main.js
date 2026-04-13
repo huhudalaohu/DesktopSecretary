@@ -28,6 +28,9 @@ const { execSync } = require('child_process');
 const https = require('https');
 const http = require('http');
 
+const DEV_SERVER_URL = process.env.ELECTRON_RENDERER_URL || 'http://localhost:5173';
+const DEV_SERVER_WAIT_MS = 15000;
+
 // electron-store 使用 dynamic import（v8+ 为 ESM-only）
 let Store;
 let store;
@@ -42,7 +45,7 @@ let capturedScreenshot = null; // desktopCapturer 返回的 NativeImage 源，�
 
 // ========== QQ 式 Dock 自动隐藏 ==========
 const DOCK_EDGE_WIDTH = 6;       // 贴边时露出的细边宽度(px)
-const DOCK_EXPANDED_WIDTH = 350; // 展开时的宽度(px)
+const DOCK_EXPANDED_WIDTH = 350; // 展开时的默认宽度(px)
 const DOCK_HEIGHT_RATIO = 0.85;  // 高度占屏幕比例
 const DOCK_HOT_ZONE_WIDTH = 20;  // 触发热区宽度(px)，鼠标进入此区域触发展开
 const DOCK_HIDE_DELAY = 1500;    // 缩回延迟(ms)
@@ -54,9 +57,78 @@ let dockHideTimer = null;        // 缩回定时器
 let dockGraceTimer = null;       // 宽限期定时器
 let dockMouseTimer = null;       // 鼠标检测定时器
 let dockInteracting = false;     // 用户是否正在窗口内交互（滚动/输入/点击）
+let dockExpandedWidth = DOCK_EXPANDED_WIDTH; // 当前展开宽度（px），用户调整后更新
 
 // 当前注册的快捷键
 let registeredShortcut = null;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getRendererUrl(routePath = '/') {
+  return new URL(routePath, `${DEV_SERVER_URL}/`).toString();
+}
+
+function canReachUrl(targetUrl) {
+  return new Promise((resolve) => {
+    const client = targetUrl.startsWith('https:') ? https : http;
+    let settled = false;
+    const request = client.get(targetUrl, (response) => {
+      response.resume();
+      if (!settled) {
+        settled = true;
+        resolve((response.statusCode || 0) < 500);
+      }
+    });
+
+    request.on('error', () => {
+      if (!settled) {
+        settled = true;
+        resolve(false);
+      }
+    });
+
+    request.setTimeout(2000, () => {
+      request.destroy();
+      if (!settled) {
+        settled = true;
+        resolve(false);
+      }
+    });
+  });
+}
+
+async function waitForDevServer(targetUrl, timeoutMs = DEV_SERVER_WAIT_MS) {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    if (await canReachUrl(targetUrl)) {
+      return true;
+    }
+    await sleep(300);
+  }
+
+  return false;
+}
+
+async function loadRendererWindow(browserWindow, routePath, fallbackFilePath) {
+  if (!app.isPackaged) {
+    const devEntryUrl = getRendererUrl(routePath);
+    const serverReady = await waitForDevServer(DEV_SERVER_URL);
+
+    if (serverReady) {
+      console.log(`[Renderer] Loading dev server: ${devEntryUrl}`);
+      await browserWindow.loadURL(devEntryUrl);
+      return;
+    }
+
+    console.warn(`[Renderer] Dev server not ready after ${DEV_SERVER_WAIT_MS}ms, fallback to file.`);
+  }
+
+  console.log(`[Renderer] Loading file: ${fallbackFilePath}`);
+  await browserWindow.loadFile(fallbackFilePath);
+}
 
 /**
  * 初始化 electron-store
@@ -105,7 +177,7 @@ function positionDockWindow(expanded) {
   const { width: sw, height: sh } = primaryDisplay.size;
   const { x: bx, y: by } = primaryDisplay.bounds;
 
-  const w = expanded ? DOCK_EXPANDED_WIDTH : DOCK_EDGE_WIDTH;
+  const w = expanded ? dockExpandedWidth : DOCK_EDGE_WIDTH;
   const h = Math.round(sh * DOCK_HEIGHT_RATIO);
 
   mainWindow.setBounds({
@@ -241,7 +313,12 @@ function startDockMouseTracking() {
 /**
  * 创建主窗口（Dock 模式）
  */
-function createWindow() {
+async function createWindow() {
+  // 从持久化存储读取用户上次设置的宽度百分比
+  const savedPct = store.get('windowWidthPercent', 20);
+  const screenW = screen.getPrimaryDisplay().size.width;
+  dockExpandedWidth = Math.max(280, Math.min(600, Math.round(screenW * savedPct / 100)));
+
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width: sw, height: sh } = primaryDisplay.size;
   const { x: bx, y: by } = primaryDisplay.bounds;
@@ -253,13 +330,13 @@ function createWindow() {
     width: DOCK_EDGE_WIDTH,
     height: h,
     frame: false,
-    transparent: false,
+    transparent: true,
     resizable: false,
     movable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
     hasShadow: false,
-    backgroundColor: '#0f172a',
+    backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -267,7 +344,7 @@ function createWindow() {
     },
   });
 
-  mainWindow.loadFile(path.join(__dirname, 'dist', 'index.html')).catch((err) => {
+  loadRendererWindow(mainWindow, '/', path.join(__dirname, 'dist', 'index.html')).catch((err) => {
     console.error('Failed to load index.html:', err);
   });
 
@@ -305,10 +382,12 @@ function calculateVirtualBounds(displays) {
 
 /**
  * 隐藏截图 overlay 窗口并恢复主窗口（不销毁，复用）
+ * 隐藏后立即发送 reset 信号清理旧截图数据，避免下次打开时闪烁旧画面
  */
 function hideOverlay() {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.hide();
+    overlayWindow.webContents.send('screenshot:reset');
   }
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.show();
@@ -330,7 +409,7 @@ function destroyOverlay() {
 /**
  * 预创建截图 overlay 窗口（隐藏状态），点击时直接 show()
  */
-function precreateOverlayWindow() {
+async function precreateOverlayWindow() {
   if (overlayWindow && !overlayWindow.isDestroyed()) return;
 
   const displays = screen.getAllDisplays();
@@ -358,7 +437,13 @@ function precreateOverlayWindow() {
     },
   });
 
-  overlayWindow.loadFile(path.join(__dirname, 'dist', 'screenshot-overlay.html'));
+  loadRendererWindow(
+    overlayWindow,
+    '/screenshot-overlay.html',
+    path.join(__dirname, 'dist', 'screenshot-overlay.html')
+  ).catch((err) => {
+    console.error('Failed to load screenshot overlay:', err);
+  });
 
   overlayWindow.on('closed', () => {
     overlayWindow = null;
@@ -368,7 +453,11 @@ function precreateOverlayWindow() {
     }
     capturedScreenshot = null;
     // 窗口关闭后延迟重建，确保下次可用
-    setTimeout(() => precreateOverlayWindow(), 500);
+    setTimeout(() => {
+      precreateOverlayWindow().catch((err) => {
+        console.error('Failed to recreate screenshot overlay:', err);
+      });
+    }, 500);
   });
 
   console.log('[Screenshot] Overlay 窗口预创建完成');
@@ -377,11 +466,20 @@ function precreateOverlayWindow() {
 /**
  * 启动截图 overlay 流程
  * 返回 Promise<dataUrl | null>，null 表示用户取消
+ *
+ * 流程优化：
+ *   1. 先截屏、发送数据到 overlay
+ *   2. 等待 overlay 确认新图片加载完毕（screenshot:ready 握手）
+ *   3. 再显示 overlay 窗口 → 避免闪烁旧截图
+ *   4. 前台窗口检测用异步 exec → 不阻塞主进程事件循环
  */
 function startScreenshotOverlay() {
   return new Promise(async (resolve) => {
     const t0 = Date.now();
     screenshotResolve = resolve;
+
+    // 清理上一次残留数据
+    capturedScreenshot = null;
 
     // 10 秒超时保护
     const timeout = setTimeout(() => {
@@ -429,13 +527,9 @@ function startScreenshotOverlay() {
     const t1 = Date.now();
     console.log(`[Screenshot] 截屏完成: ${t1 - t0}ms`);
 
-    // 3. 获取前台窗口信息（异步，不阻塞显示）
-    let windowRect = null;
-
-    // 4. 确保 overlay 窗口存在
+    // 3. 确保 overlay 窗口存在
     if (!overlayWindow || overlayWindow.isDestroyed()) {
       precreateOverlayWindow();
-      // 等待窗口加载完成
       await new Promise((r) => {
         if (overlayWindow.webContents.isLoading()) {
           overlayWindow.webContents.once('did-finish-load', r);
@@ -445,7 +539,7 @@ function startScreenshotOverlay() {
       });
     }
 
-    // 5. 找到主屏幕对应的 source
+    // 4. 找到主屏幕对应的 source
     const primaryDisplay = screen.getPrimaryDisplay();
     let primarySource = sources[0];
     for (const s of sources) {
@@ -455,14 +549,11 @@ function startScreenshotOverlay() {
       }
     }
 
-    // 6. 显示 overlay 并发送截图数据
-    overlayWindow.show();
-    overlayWindow.focus();
-
-    // 发送截图数据到 overlay
+    // 5. 先发送截图数据，再等 overlay 确认图片加载完毕
+    //    这样 overlay.show() 时展示的就是当前截图，不会闪旧图
     overlayWindow.webContents.send('screenshot:start', {
       dataUrl: primarySource.thumbnail.toDataURL(),
-      windowRect,
+      windowRect: null,
       virtualBounds: calculateVirtualBounds(displays),
       primaryDisplay: {
         bounds: primaryDisplay.bounds,
@@ -470,55 +561,75 @@ function startScreenshotOverlay() {
       },
     });
 
-    const t2 = Date.now();
-    console.log(`[Screenshot] Overlay 显示完成: ${t2 - t0}ms (截屏${t1 - t0}ms + 显示${t2 - t1}ms)`);
+    // 等待 overlay 发回 screenshot:ready（图片 onload 后触发），2s 超时兜底
+    await new Promise((readyResolve) => {
+      const readyTimeout = setTimeout(() => {
+        console.log('[Screenshot] overlay ready 超时，强制显示');
+        readyResolve();
+      }, 2000);
+      ipcMain.once('screenshot:ready', () => {
+        clearTimeout(readyTimeout);
+        readyResolve();
+      });
+    });
 
-    // 异步获取前台窗口（不阻塞截图流程）
+    // 6. 图片就绪，显示 overlay
+    overlayWindow.show();
+    overlayWindow.focus();
+
+    const t2 = Date.now();
+    console.log(`[Screenshot] Overlay 显示完成: ${t2 - t0}ms (截屏${t1 - t0}ms + 加载${t2 - t1}ms)`);
+
+    // 7. 异步获取前台窗口（使用 exec 而非 execSync，不阻塞主进程）
     if (process.platform === 'win32') {
-      try {
-        const psScript = `
-          Add-Type @"
-            using System;
-            using System.Runtime.InteropServices;
-            using System.Text;
-            public class Win32 {
-              [DllImport("user32.dll")]
-              public static extern IntPtr GetForegroundWindow();
-              [DllImport("user32.dll", CharSet = CharSet.Auto)]
-              public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-              [DllImport("user32.dll")]
-              public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-              [DllImport("user32.dll")]
-              public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-              [StructLayout(LayoutKind.Sequential)]
-              public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-            }
-"@;
-          $hwnd = [Win32]::GetForegroundWindow();
-          $title = New-Object System.Text.StringBuilder 256;
-          [Win32]::GetWindowText($hwnd, $title, 256) | Out-Null;
-          $rect = New-Object Win32+RECT;
-          [Win32]::GetWindowRect($hwnd, [ref]$rect) | Out-Null;
-          $pidVal = [uint32]0;
-          [Win32]::GetWindowThreadProcessId($hwnd, [ref]$pidVal) | Out-Null;
-          $proc = Get-Process -Id $pidVal -ErrorAction SilentlyContinue;
-          @{ title = $title.ToString(); processName = if ($proc) { $proc.ProcessName } else { "" }; rect = @{ left = $rect.Left; top = $rect.Top; right = $rect.Right; bottom = $rect.Bottom } } | ConvertTo-Json -Compress
-        `;
-        const output = execSync(`powershell -NoProfile -Command "${psScript.replace(/"/g, '\\"')}"`, {
-          timeout: 3000, encoding: 'utf8', windowsHide: true,
-        });
-        const winInfo = JSON.parse(output.trim());
-        if (winInfo.processName && !winInfo.processName.toLowerCase().includes('electron')) {
-          windowRect = winInfo.rect;
-          // 异步更新 overlay 的高亮框
-          if (overlayWindow && !overlayWindow.isDestroyed()) {
-            overlayWindow.webContents.send('screenshot:update-window-rect', windowRect);
+      const { exec } = require('child_process');
+      const psScript = `
+        Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public class Win32 {
+            [DllImport("user32.dll")]
+            public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll", CharSet = CharSet.Auto)]
+            public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+            [DllImport("user32.dll")]
+            public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+            [DllImport("user32.dll")]
+            public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+            [StructLayout(LayoutKind.Sequential)]
+            public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
           }
-          console.log(`[Screenshot] 前台窗口检测: ${Date.now() - t0}ms`);
+"@;
+        $hwnd = [Win32]::GetForegroundWindow();
+        $title = New-Object System.Text.StringBuilder 256;
+        [Win32]::GetWindowText($hwnd, $title, 256) | Out-Null;
+        $rect = New-Object Win32+RECT;
+        [Win32]::GetWindowRect($hwnd, [ref]$rect) | Out-Null;
+        $pidVal = [uint32]0;
+        [Win32]::GetWindowThreadProcessId($hwnd, [ref]$pidVal) | Out-Null;
+        $proc = Get-Process -Id $pidVal -ErrorAction SilentlyContinue;
+        @{ title = $title.ToString(); processName = if ($proc) { $proc.ProcessName } else { "" }; rect = @{ left = $rect.Left; top = $rect.Top; right = $rect.Right; bottom = $rect.Bottom } } | ConvertTo-Json -Compress
+      `;
+      exec(`powershell -NoProfile -Command "${psScript.replace(/"/g, '\\"')}"`, {
+        timeout: 3000, encoding: 'utf8', windowsHide: true,
+      }, (err, stdout) => {
+        if (err) {
+          console.log('[Screenshot] 前台窗口检测失败（非关键）:', err.message);
+          return;
         }
-      } catch (err) {
-        console.log('[Screenshot] 前台窗口检测失败（非关键）:', err.message);
-      }
+        try {
+          const winInfo = JSON.parse(stdout.trim());
+          if (winInfo.processName && !winInfo.processName.toLowerCase().includes('electron')) {
+            if (overlayWindow && !overlayWindow.isDestroyed()) {
+              overlayWindow.webContents.send('screenshot:update-window-rect', winInfo.rect);
+            }
+            console.log(`[Screenshot] 前台窗口检测: ${Date.now() - t0}ms`);
+          }
+        } catch (parseErr) {
+          console.log('[Screenshot] 前台窗口 JSON 解析失败:', parseErr.message);
+        }
+      });
     }
   });
 }
@@ -762,6 +873,8 @@ function registerIpcHandlers() {
     const minW = 280;
     const maxW = 600;
     const w = Math.max(minW, Math.min(maxW, newWidth));
+    // 记住用户设置的展开宽度
+    dockExpandedWidth = w;
     // Dock 模式下：展开窗口并调整宽度
     if (!dockExpanded) expandDock('resize-window');
     const primaryDisplay = screen.getPrimaryDisplay();
@@ -1144,9 +1257,9 @@ app.whenReady().then(async () => {
   try {
     await initStore();
     registerIpcHandlers();
-    createWindow();
+    await createWindow();
     // 预创建截图 overlay 窗口（隐藏），点击时直接 show() 不需重新初始化
-    precreateOverlayWindow();
+    await precreateOverlayWindow();
     console.log('createWindow() completed, window count:', BrowserWindow.getAllWindows().length);
 
     // 启动时自动注册保存的快捷键
@@ -1176,7 +1289,9 @@ app.whenReady().then(async () => {
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow();
+        createWindow().catch((err) => {
+          console.error('Failed to recreate main window:', err);
+        });
       }
     });
   } catch (err) {

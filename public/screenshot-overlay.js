@@ -18,20 +18,55 @@ let dragStart = null;        // 拖拽起始点（窗口本地坐标）
 let virtualBounds = null;    // 虚拟屏幕边界
 let primaryDisplay = null;   // 主显示器信息
 
+/**
+ * 重置所有状态并清空画面（overlay 隐藏时由主进程触发）
+ */
+function resetOverlay() {
+  mode = 'detected';
+  windowRect = null;
+  customRect = null;
+  dragStart = null;
+
+  const bg = document.getElementById('screenshot-bg');
+  bg.src = '';
+
+  const canvas = document.getElementById('overlay-canvas');
+  const ctx = canvas.getContext('2d');
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
 // ========== 初始化 ==========
 api.onScreenshotStart((data) => {
+  // 重置所有状态，防止残留上一次截图数据
+  mode = 'detected';
+  customRect = null;
+  dragStart = null;
   windowRect = data.windowRect;
   virtualBounds = data.virtualBounds;
   primaryDisplay = data.primaryDisplay;
 
-  // 设置截图背景
   const bg = document.getElementById('screenshot-bg');
-  bg.src = data.dataUrl;
 
-  // 延迟一帧等待图片加载后绘制
-  requestAnimationFrame(() => {
+  // 先清空旧图，再设置新图
+  bg.src = '';
+  bg.onload = () => {
     drawOverlay();
-  });
+    // 通知主进程：新截图已加载完毕，可以显示 overlay 窗口
+    api.screenshotReady();
+  };
+  bg.onerror = () => {
+    // 即使加载失败也要通知，避免主进程永久等待
+    drawOverlay();
+    api.screenshotReady();
+  };
+  bg.src = data.dataUrl;
+});
+
+// 监听重置信号（overlay 隐藏时清理旧画面）
+api.onScreenshotReset(() => {
+  resetOverlay();
 });
 
 // 异步更新前台窗口高亮框
