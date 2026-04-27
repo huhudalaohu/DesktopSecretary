@@ -13,7 +13,6 @@ const isWin = process.platform === 'win32';
 function mainWindowOptions(base) {
   const opts = {
     ...base,
-    frame: false,
     transparent: true,
     skipTaskbar: true,
     alwaysOnTop: true,
@@ -22,11 +21,15 @@ function mainWindowOptions(base) {
     movable: true,
   };
   if (isMac) {
-    // mac 下使用 vibrancy 获得磨砂；且让窗口跟随用户切 Space
+    // mac 下保留 frame（配合 titleBarStyle:hidden 实现视觉无框+保留系统拖放）
+    // frame:false 在 macOS 会导致无法接收 Finder 文件拖放
+    opts.frame = true;
     opts.vibrancy = 'under-window';
     opts.visualEffectState = 'active';
     opts.titleBarStyle = 'hidden';
     opts.trafficLightPosition = { x: -100, y: -100 }; // 隐藏红绿灯
+  } else {
+    opts.frame = false;
   }
   return opts;
 }
@@ -57,7 +60,9 @@ function overlayWindowOptions(base) {
  */
 function applyMainWindowPlatformSetup(win) {
   if (isMac) {
-    win.setAlwaysOnTop(true, 'screen-saver');
+    // screen-saver 层级过高会导致 Finder 拖拽代理图标被 Electron 窗口遮挡
+    // 改用 floating 层级，仍然置顶但允许拖放图标正常显示
+    win.setAlwaysOnTop(true, 'floating');
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   }
   // Windows 下默认 alwaysOnTop: true 即可穿透大多数场景

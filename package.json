@@ -34,6 +34,7 @@
       "node_modules/node-screenshots/**/*",
       "node_modules/get-windows/**/*"
     ],
+    "afterSign": false,
     "electronDownload": {
       "mirror": "https://npmmirror.com/mirrors/electron/"
     },
@@ -44,7 +45,8 @@
     "win": {
       "target": "nsis",
       "icon": "build/icon.png",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "artifactName": "${productName}-${version}-win-x64.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -70,7 +72,8 @@
           ]
         }
       ],
-      "icon": "build/icon.icns",
+      "icon": "build/icon.png",
+      "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
@@ -89,7 +92,11 @@
   },
   "dependencies": {
     "@cloudbase/node-sdk": "^3.18.1",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "bcryptjs": "^3.0.3",
+    "electron-context-menu": "^4.1.2",
     "electron-store": "^8.2.0",
     "electron-updater": "^6.8.3",
     "get-windows": "^9.3.0",

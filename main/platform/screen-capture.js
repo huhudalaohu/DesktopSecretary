@@ -23,7 +23,7 @@
  */
 
 const { desktopCapturer, screen } = require('electron');
-const { isMac } = process.platform === 'darwin' ? { isMac: true } : { isMac: false };
+const isMac = process.platform === 'darwin';
 
 let nsModule = null;
 let nsLoadAttempted = false;

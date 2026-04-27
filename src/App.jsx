@@ -22,6 +22,37 @@ import {
   recordTokenUsage,
 } from './ai-config';
 import { X, Pin, PinOff, Settings, Key, Eye, EyeOff, ChevronDown, Trash2, RotateCw, Download, CheckCircle, ArrowUpCircle, AlertCircle } from 'lucide-react';
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  pointerWithin,
+  closestCenter,
+} from '@dnd-kit/core';
+
+/**
+ * 自定义 PointerSensor：忽略 input/textarea/contenteditable 上的 pointerdown，
+ * 避免在输入框内选中文本时误触拖拽导致界面卡死。
+ */
+class SmartPointerSensor extends PointerSensor {
+  static activators = [
+    {
+      eventName: 'onPointerDown',
+      handler: ({ nativeEvent: event }) => {
+        const target = event.target;
+        if (
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target.closest('input, textarea, [contenteditable="true"], [contenteditable=""]')
+        ) {
+          return false;
+        }
+        return true;
+      },
+    },
+  ];
+}
 
 const api = window.desktopAPI;
 
@@ -799,32 +830,64 @@ export default function App() {
           <div className={`snap-hint snap-hint--${snapHintEdge}`} aria-hidden="true" />
         )}
 
-        {/* 待办列表 */}
-      <div className="px-4 pb-2">
-        <TodoList
-          workspaces={workspaces}
-          activeWorkspace={activeWorkspace}
-          onSwitchWorkspace={setActiveWorkspace}
-          onScreenshot={handleScreenshotAndAnalyze}
-          screenshotStatus={screenshotStatus}
-          reminderLevels={reminderLevels}
-          focusTodoId={focusTodoId}
-        />
-      </div>
+        <DndContext
+          sensors={useSensors(useSensor(SmartPointerSensor, { activationConstraint: { distance: 5 } }))}
+          collisionDetection={(args) => {
+            const pointer = pointerWithin(args);
+            return pointer.length > 0 ? pointer : closestCenter(args);
+          }}
+          onDragEnd={(event) => {
+            const { active, over } = event;
+            delete window.__draggingWorkspace;
+            if (!over) return;
 
-      {/* 工作区切换 — 撑满宽度，与下方项目区融为一体 */}
-      <WorkspaceSwitcher
-        workspaces={workspaces}
-        active={activeWorkspace}
-        onSwitch={setActiveWorkspace}
-        onAdd={addWorkspace}
-        onDelete={deleteWorkspace}
-        onReorder={reorderWorkspaces}
-        onRename={renameWorkspace}
-        onDuplicate={duplicateWorkspace}
-      />
+            // 1) 在 workspace 标签之间 reorder
+            const wsOverIndex = workspaces.findIndex((w) => w.id === over.id);
+            const wsActiveIndex = workspaces.findIndex((w) => w.id === active.id);
+            if (wsOverIndex !== -1 && wsActiveIndex !== -1 && wsOverIndex !== wsActiveIndex) {
+              reorderWorkspaces(wsActiveIndex, wsOverIndex);
+              return;
+            }
 
-      {/* 待办时间轴 */}
+            // 2) 拖到 TodoList item 上绑定 workspace
+            if (over.id.startsWith('todo-')) {
+              const todoId = over.id.slice(5);
+              const ws = workspaces.find((w) => w.id === active.id);
+              if (ws && todoId) {
+                window.dispatchEvent(new CustomEvent('bind-workspace', {
+                  detail: { todoId, workspaceId: ws.id },
+                }));
+              }
+            }
+          }}
+        >
+          {/* 待办列表 */}
+          <div className="px-4 pb-2">
+            <TodoList
+              workspaces={workspaces}
+              activeWorkspace={activeWorkspace}
+              onSwitchWorkspace={setActiveWorkspace}
+              onScreenshot={handleScreenshotAndAnalyze}
+              screenshotStatus={screenshotStatus}
+              reminderLevels={reminderLevels}
+              focusTodoId={focusTodoId}
+            />
+          </div>
+
+          {/* 工作区切换 — 撑满宽度，与下方项目区融为一体 */}
+          <WorkspaceSwitcher
+            workspaces={workspaces}
+            active={activeWorkspace}
+            onSwitch={setActiveWorkspace}
+            onAdd={addWorkspace}
+            onDelete={deleteWorkspace}
+            onReorder={reorderWorkspaces}
+            onRename={renameWorkspace}
+            onDuplicate={duplicateWorkspace}
+          />
+        </DndContext>
+
+        {/* 待办时间轴 */}
       <Timeline
         activeWorkspace={activeWorkspace}
         reminderLevels={reminderLevels}

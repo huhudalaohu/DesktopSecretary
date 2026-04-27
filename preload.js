@@ -304,6 +304,13 @@ contextBridge.exposeInMainWorld('desktopAPI', {
     return () => ipcRenderer.removeListener('dock:edge-changed', handler);
   },
 
+  /** 监听待办提醒触发 */
+  onReminderTriggered: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('reminder:triggered', handler);
+    return () => ipcRenderer.removeListener('reminder:triggered', handler);
+  },
+
   // _appVersion 已废弃，版本号由 Vite 构建时通过 __APP_VERSION__ 注入
   // 保留此注释以避免破坏可能引用该字段的第三方代码
 });
@@ -318,4 +325,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   downloadUpdate: (url) => ipcRenderer.invoke('download-update', url),
   installUpdate: () => ipcRenderer.invoke('install-update'),
+});
+
+// === 拖放文件路径预存（解决 frameless 窗口 getFilePath 失效问题）===
+// 注意：不在 window 级别监听 dragover，避免与 React 合成事件冲突
+// React 组件的 onDragOver 会自行处理 e.preventDefault() 和 dropEffect
+window.addEventListener('dragenter', (e) => {
+  console.log('[Preload] dragenter', e.dataTransfer?.types, e.dataTransfer?.files?.length);
+});
+window.addEventListener('drop', (e) => {
+  // 阻止默认行为（防止 Electron 导航到拖入的文件）
+  e.preventDefault();
+  console.log('[Preload] drop', 'types:', e.dataTransfer?.types, 'files:', e.dataTransfer?.files?.length);
+  // 提前提取文件路径并缓存，避免在 React 合成事件中被框架拦截
+  if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+    const paths = [];
+    for (let i = 0; i < e.dataTransfer.files.length; i++) {
+      try {
+        const p = webUtils.getPathForFile(e.dataTransfer.files[i]);
+        if (p) paths.push(p);
+      } catch (err) {
+        console.log('[Preload] getPathForFile failed:', err.message);
+      }
+    }
+    if (paths.length > 0) {
+      window.__droppedFilePaths = paths;
+      console.log('[Preload] Dropped file paths cached:', paths);
+    }
+  }
 });

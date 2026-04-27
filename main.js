@@ -133,13 +133,76 @@ let dockResizeThrottleTimer = null;
 let lastSnapHintEdge = undefined; // 防止重复推送 snap-hint
 let suppressMoveHint = false;     // 编程性 setBounds 期间屏蔽蓝光推送
 let suppressMoveHintTimer = null;
+let moveEndDebounceTimer = null;  // macOS 上检测拖动结束（moved 事件不可靠）
+let lastHandleWindowMovedTime = 0; // 防止 moved / debounce 重复执行
 
 // 当前注册的快捷键
 let registeredShortcut = null;
 let registeredPinShortcut = null;
 
+// 提醒通知轮询定时器
+let reminderCheckInterval = null;
+const REMINDER_CHECK_MS = 60 * 1000; // 每分钟检查一次
+const REMINDER_COOLDOWN_MS = 5 * 60 * 1000; // 同一待办 5 分钟内不重复提醒
+
+// fetchRenderedTitle 并发锁，防止同时创建多个 offscreen 窗口
+let renderedTitleLock = false;
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * 检查待办提醒：每分钟轮询一次，找到到期的未触发提醒并弹出对话框
+ */
+function checkReminders() {
+  if (!store || !mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    const todos = store.get('todosGlobal', []);
+    if (!Array.isArray(todos) || todos.length === 0) return;
+    const now = Date.now();
+    const dueTodos = todos.filter(
+      (t) => !t.done && t.reminderTime && t.reminderTime <= now && !t.reminderTriggered
+    );
+    if (dueTodos.length === 0) return;
+    // 只提醒第一个，避免同时弹出多个对话框
+    const todo = dueTodos[0];
+    // 标记已触发并保存
+    const updated = todos.map((t) =>
+      t.id === todo.id ? { ...t, reminderTriggered: true } : t
+    );
+    store.set('todosGlobal', updated);
+    // 通知前端刷新
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('reminder:triggered', { todoId: todo.id });
+    }
+    // 弹出系统通知（优先使用系统通知，降级到对话框）
+    if (Notification.isSupported()) {
+      const notif = new Notification({
+        title: '待办提醒',
+        body: todo.text || '有待办事项到期',
+        silent: false,
+      });
+      notif.show();
+    } else {
+      dialog.showMessageBox(mainWindow, {
+        type: 'info',
+        title: '待办提醒',
+        message: '待办事项到期',
+        detail: todo.text || '',
+        buttons: ['知道了'],
+      });
+    }
+  } catch (err) {
+    console.error('[Reminder] 检查提醒失败:', err.message);
+  }
+}
+
+function startReminderPolling() {
+  if (reminderCheckInterval) clearInterval(reminderCheckInterval);
+  checkReminders(); // 启动时立即检查一次
+  reminderCheckInterval = setInterval(checkReminders, REMINDER_CHECK_MS);
+  console.log('[Reminder] 提醒轮询已启动，间隔', REMINDER_CHECK_MS, 'ms');
 }
 
 function getRendererUrl(routePath = '/') {
@@ -243,6 +306,33 @@ async function initStore() {
 
 // ========== API Key 加密存储 ==========
 
+let safeStorageAvailable = false;
+
+/**
+ * 初始化 safeStorage 可用性检测（在 app.whenReady 后调用）
+ * 不仅依赖 isEncryptionAvailable()，还做一轮实际加解密测试，
+ * 避免某些 macOS 环境（如未签名应用、钥匙串权限受限）下反复报错。
+ */
+function initSafeStorage() {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      safeStorageAvailable = false;
+      console.warn('[SafeStorage] isEncryptionAvailable() 返回 false，使用明文存储');
+      return;
+    }
+    const testData = 'test-' + Date.now();
+    const encrypted = safeStorage.encryptString(testData);
+    const decrypted = safeStorage.decryptString(encrypted);
+    safeStorageAvailable = decrypted === testData;
+    if (!safeStorageAvailable) {
+      console.warn('[SafeStorage] 加解密测试不一致，使用明文存储');
+    }
+  } catch (err) {
+    safeStorageAvailable = false;
+    console.warn('[SafeStorage] 初始化测试失败，将使用明文存储:', err.message);
+  }
+}
+
 /**
  * 加密 aiSettings 中的 apiKey（使用操作系统级加密，如 Windows DPAPI）
  * 加密后的数据以 base64 形式存入 apiKeyEncrypted，并删除明文 apiKey
@@ -254,7 +344,7 @@ function encryptAiSettings(settings) {
     return settings;
   }
   try {
-    if (!safeStorage.isEncryptionAvailable()) {
+    if (!safeStorageAvailable) {
       console.warn('[Encrypt] safeStorage 不可用，继续使用明文存储');
       return settings;
     }
@@ -279,7 +369,7 @@ function decryptAiSettings(settings) {
   if (settings.apiKey) return settings;
   if (!settings.apiKeyEncrypted) return settings;
   try {
-    if (!safeStorage.isEncryptionAvailable()) {
+    if (!safeStorageAvailable) {
       console.warn('[Decrypt] safeStorage 不可用，无法解密 API Key');
       return settings;
     }
@@ -632,11 +722,23 @@ async function createWindow() {
     dockMoveThrottleTimer = setTimeout(() => {
       dockMoveThrottleTimer = null;
       handleWindowMove();
+
+      // macOS 上 frame:false + -webkit-app-region:drag 不会触发 moved 事件，
+      // 用 debounce 检测拖动结束（150ms 无新 move 即认为停下了）
+      if (process.platform === 'darwin') {
+        clearTimeout(moveEndDebounceTimer);
+        moveEndDebounceTimer = setTimeout(() => {
+          if (Date.now() - lastHandleWindowMovedTime < 300) return;
+          handleWindowMoved();
+        }, 150);
+      }
     }, DOCK_MOVE_THROTTLE);
   });
 
-  // 拖动结束：边缘吸附判定
+  // 拖动结束：边缘吸附判定（macOS 上 moved 事件对 frameless 窗口不可靠，跳过）
   mainWindow.on('moved', () => {
+    if (process.platform === 'darwin') return;
+    if (Date.now() - lastHandleWindowMovedTime < 300) return;
     handleWindowMoved();
   });
 
@@ -1616,6 +1718,12 @@ function registerIpcHandlers() {
    * 流程：创建 offscreen BrowserWindow → loadURL → 等待 JS 执行 → executeJavaScript 提取标题
    */
   async function fetchRenderedTitle(targetUrl) {
+    // 并发锁：如果已有实例在执行，等待后重试（利用缓存降低重试频率）
+    if (renderedTitleLock) {
+      await sleep(500);
+      return fetchRenderedTitle(targetUrl);
+    }
+    renderedTitleLock = true;
     return new Promise((resolve) => {
       const win = new BrowserWindow({
         show: false,
@@ -1629,9 +1737,15 @@ function registerIpcHandlers() {
         },
       });
 
-      const timeout = setTimeout(() => {
+      const cleanup = (result) => {
+        clearTimeout(timeout);
         try { win.destroy(); } catch {}
-        resolve({ title: null, favicon: null, source: 'error' });
+        renderedTitleLock = false;
+        resolve(result);
+      };
+
+      const timeout = setTimeout(() => {
+        cleanup({ title: null, favicon: null, source: 'error' });
       }, 8000);
 
       win.webContents.on('did-finish-load', async () => {
@@ -1656,17 +1770,13 @@ function registerIpcHandlers() {
               return { title: document.title.trim(), favicon: null };
             })()
           `);
-          clearTimeout(timeout);
-          try { win.destroy(); } catch {}
           if (result && result.title && result.title.length > 0 && result.title !== 'about:blank') {
-            resolve({ title: result.title, favicon: result.favicon, source: 'render' });
+            cleanup({ title: result.title, favicon: result.favicon, source: 'render' });
           } else {
-            resolve({ title: null, favicon: null, source: 'error' });
+            cleanup({ title: null, favicon: null, source: 'error' });
           }
         } catch {
-          clearTimeout(timeout);
-          try { win.destroy(); } catch {}
-          resolve({ title: null, favicon: null, source: 'error' });
+          cleanup({ title: null, favicon: null, source: 'error' });
         }
       });
 
@@ -2502,6 +2612,7 @@ app.whenReady().then(async () => {
     platform.windowOptions.applyAppLevelPlatformSetup(app);
     await initStore();
     initSync(store, tcbApp);
+    initSafeStorage();
     await migrateApiKeyEncryption();
     registerIpcHandlers();
     await createWindow();
@@ -2651,6 +2762,9 @@ app.whenReady().then(async () => {
         }
       });
     }
+
+    // 启动待办提醒轮询
+    startReminderPolling();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {
