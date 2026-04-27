@@ -21,15 +21,71 @@
  *   - unregister-shortcut  — 注销全局快捷键
  */
 
-const { app, BrowserWindow, screen, ipcMain, shell, desktopCapturer, dialog, globalShortcut } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, shell, desktopCapturer, dialog, globalShortcut, safeStorage } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const http = require('http');
+const os = require('os');
+const { spawn } = require('child_process');
 const platform = require('./main/platform');
+const { initSync, getAuth, getEngine } = require('./main/sync');
+
+// 开发模式下加载 .env 文件；生产环境 asar 中不含 dotenv，依赖系统环境变量或构建注入
+try {
+  require('dotenv').config();
+} catch {
+  // 生产环境静默跳过，process.env 直接使用系统环境变量
+}
+
+// ========== 腾讯云 CloudBase ==========
+let tcbApp = null;
+let tcbAuth = null;
+const TCB_ENV_ID = process.env.TCB_ENV_ID || 'ds-dev-d9g28xlrgd2600837';
+let TCB_SECRET_ID = process.env.TCB_SECRET_ID;
+let TCB_SECRET_KEY = process.env.TCB_SECRET_KEY;
+
+// 生产版本 fallback：从配置文件读取凭证（asar 打包后无 .env）
+if (!TCB_SECRET_ID || !TCB_SECRET_KEY) {
+  try {
+    const configPath = path.join(__dirname, 'config', 'publish-config.json');
+    if (fs.existsSync(configPath)) {
+      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      TCB_SECRET_ID = config.secretId;
+      TCB_SECRET_KEY = config.secretKey;
+      console.log('[CloudBase] 使用配置文件凭证');
+    }
+  } catch (err) {
+    console.warn('[CloudBase] 读取配置文件失败:', err.message);
+  }
+}
+
+if (TCB_SECRET_ID && TCB_SECRET_KEY) {
+  try {
+    const cloudbase = require('@cloudbase/node-sdk');
+    tcbApp = cloudbase.init({
+      env: TCB_ENV_ID,
+      secretId: TCB_SECRET_ID,
+      secretKey: TCB_SECRET_KEY,
+    });
+    tcbAuth = tcbApp.auth();
+    console.log('[CloudBase] 初始化成功');
+  } catch (err) {
+    console.error('[CloudBase] 初始化失败:', err.message);
+    tcbApp = null;
+    tcbAuth = null;
+  }
+} else {
+  console.warn('[CloudBase] 未配置 TCB_SECRET_ID / TCB_SECRET_KEY，同步功能已禁用');
+}
 
 const DEV_SERVER_URL = process.env.ELECTRON_RENDERER_URL || 'http://localhost:5173';
 const DEV_SERVER_WAIT_MS = 15000;
+
+// 公开更新 API（无需 SecretKey，客户端直接 fetch）
+// 优先读取环境变量（开发模式），fallback 到硬编码的 COS 地址（生产环境开箱即用）
+const UPDATE_API_URL = process.env.UPDATE_API_URL || 'https://ds-update-1420931574.cos.ap-guangzhou.myqcloud.com/update.json';
 
 // electron-store 使用 dynamic import（v8+ 为 ESM-only）
 let Store;
@@ -47,12 +103,12 @@ let capturedScreenshot = null; // 平台抽象层返回的 CaptureSource[]，用
 let overlayActive = false;     // 当前是否处于截图选区阶段
 
 // ========== QQ 式 Dock 自动隐藏 ==========
-const DOCK_EDGE_WIDTH = 6;        // 贴边时露出的细边宽度(px)
+const DOCK_EDGE_WIDTH = 3;        // 贴边时露出的细边宽度(px)
 const DOCK_EXPANDED_WIDTH = 350;  // 展开时的默认宽度(px)
 const DOCK_HEIGHT_RATIO = 0.85;   // 高度占屏幕比例
-const DOCK_HOT_ZONE_WIDTH = 20;   // 触发热区宽度(px)
+const DOCK_HOT_ZONE_WIDTH = 8;    // 触发热区宽度(px)
 const DOCK_EXPAND_DELAY = 800;    // 鼠标贴边到展开的延迟(ms) — 防误触
-const DOCK_GRACE_PERIOD = 500;    // 展开后的宽限期(ms)，期间不检测离开
+const DOCK_GRACE_PERIOD = 3000;   // 展开后的宽限期(ms)，期间不检测离开
 const DOCK_SNAP_THRESHOLD = 20;   // 拖动释放时离边缘 ≤ 此距离则吸附(px)
 const DOCK_MOVE_THROTTLE = 30;    // 拖动 move 事件节流(ms)
 const DOCK_MIN_WIDTH = 280;
@@ -80,6 +136,7 @@ let suppressMoveHintTimer = null;
 
 // 当前注册的快捷键
 let registeredShortcut = null;
+let registeredPinShortcut = null;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -184,6 +241,93 @@ async function initStore() {
   });
 }
 
+// ========== API Key 加密存储 ==========
+
+/**
+ * 加密 aiSettings 中的 apiKey（使用操作系统级加密，如 Windows DPAPI）
+ * 加密后的数据以 base64 形式存入 apiKeyEncrypted，并删除明文 apiKey
+ */
+function encryptAiSettings(settings) {
+  if (!settings || typeof settings !== 'object') return settings;
+  if (!settings.apiKey) {
+    // 没有明文 key，直接返回（可能已经是加密形态）
+    return settings;
+  }
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      console.warn('[Encrypt] safeStorage 不可用，继续使用明文存储');
+      return settings;
+    }
+    const encrypted = safeStorage.encryptString(settings.apiKey);
+    const result = { ...settings };
+    result.apiKeyEncrypted = encrypted.toString('base64');
+    delete result.apiKey;
+    return result;
+  } catch (err) {
+    console.error('[Encrypt] API Key 加密失败:', err);
+    return settings;
+  }
+}
+
+/**
+ * 解密 aiSettings 中的 apiKey
+ * 如果存在明文 apiKey（旧数据），直接返回并触发迁移
+ */
+function decryptAiSettings(settings) {
+  if (!settings || typeof settings !== 'object') return settings;
+  // 旧版兼容：存在明文 apiKey
+  if (settings.apiKey) return settings;
+  if (!settings.apiKeyEncrypted) return settings;
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      console.warn('[Decrypt] safeStorage 不可用，无法解密 API Key');
+      return settings;
+    }
+    const encrypted = Buffer.from(settings.apiKeyEncrypted, 'base64');
+    const apiKey = safeStorage.decryptString(encrypted);
+    const result = { ...settings };
+    result.apiKey = apiKey;
+    delete result.apiKeyEncrypted;
+    return result;
+  } catch (err) {
+    console.error('[Decrypt] API Key 解密失败:', err);
+    return settings;
+  }
+}
+
+/**
+ * 安全的 store 写入，自动对 aiSettings 中的 apiKey 加密
+ */
+function safeStoreSet(key, value) {
+  if (key === 'aiSettings') {
+    value = encryptAiSettings(value);
+  }
+  store.set(key, value);
+}
+
+/**
+ * 将旧版明文 apiKey 迁移为加密存储
+ */
+async function migrateApiKeyEncryption() {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      console.warn('[Migrate] safeStorage 不可用，跳过加密迁移');
+      return;
+    }
+    const settings = store.get('aiSettings', {});
+    if (settings && settings.apiKey && settings.apiKey.length > 0 && !settings.apiKeyEncrypted) {
+      const encrypted = safeStorage.encryptString(settings.apiKey);
+      const migrated = { ...settings };
+      migrated.apiKeyEncrypted = encrypted.toString('base64');
+      delete migrated.apiKey;
+      store.set('aiSettings', migrated);
+      console.log('[Migrate] API Key 已迁移为操作系统级加密存储');
+    }
+  } catch (err) {
+    console.error('[Migrate] API Key 加密迁移失败:', err);
+  }
+}
+
 /**
  * 将窗口定位到 Dock 位置
  *   - dockedEdge 为 'left'|'right'|'top'：按边缘计算（expanded 决定露出宽/高）；
@@ -223,7 +367,11 @@ function positionDockWindow(expanded) {
   } else if (dockedEdge === 'top') {
     const storedW = dockEdgeOffset?.width ?? dockExpandedWidth;
     w = Math.max(DOCK_MIN_WIDTH, Math.min(sw, storedW));
-    h = expanded ? defaultH : DOCK_EDGE_WIDTH;
+    if (expanded) {
+      h = Math.max(DOCK_MIN_HEIGHT, Math.min(sh, dockEdgeOffset?.height ?? defaultH));
+    } else {
+      h = DOCK_EDGE_WIDTH;
+    }
     const defaultX = bx + Math.round((sw - w) / 2);
     x = dockEdgeOffset?.x ?? defaultX;
     x = Math.max(bx, Math.min(bx + sw - w, x));
@@ -575,8 +723,11 @@ function handleWindowMoved() {
     dockedEdge = targetEdge;
     if (targetEdge === 'right' || targetEdge === 'left') {
       dockEdgeOffset = { y: b.y, height: b.height };
+      // 保留用户调整后的窗口宽度，避免吸附后宽度被重置
+      dockExpandedWidth = Math.max(DOCK_MIN_WIDTH, Math.min(DOCK_MAX_WIDTH, b.width));
+      store.set('windowWidthPercent', Math.round((dockExpandedWidth / screen.getPrimaryDisplay().size.width) * 100));
     } else {
-      dockEdgeOffset = { x: b.x, width: b.width };
+      dockEdgeOffset = { x: b.x, width: b.width, height: b.height };
     }
     store.set('dockedEdge', targetEdge);
     store.set('dockEdgeOffset', dockEdgeOffset);
@@ -634,9 +785,20 @@ async function createOverlayForDisplay(display) {
 
   const overlayFile = path.join(__dirname, 'dist', 'screenshot-overlay.html');
   try {
-    await win.loadFile(overlayFile);
+    // 开发模式下优先从 Vite dev server 加载，避免 dist 目录不存在或过时
+    if (!app.isPackaged) {
+      const devOverlayUrl = `${DEV_SERVER_URL}/screenshot-overlay.html`;
+      const serverReady = await canReachUrl(devOverlayUrl);
+      if (serverReady) {
+        await win.loadURL(devOverlayUrl);
+      } else {
+        await win.loadFile(overlayFile);
+      }
+    } else {
+      await win.loadFile(overlayFile);
+    }
   } catch (err) {
-    console.error(`[Screenshot] overlay[${display.id}] loadFile 失败:`, err);
+    console.error(`[Screenshot] overlay[${display.id}] 加载失败:`, err);
     throw err;
   }
 
@@ -764,7 +926,7 @@ function startScreenshotOverlay() {
       screenshotTimeout = null;
     }
 
-    // 10 秒超时保护
+    // 120 秒超时保护（给用户足够时间选区）
     screenshotTimeout = setTimeout(() => {
       console.log('[Screenshot] overlay 超时，自动取消');
       hideOverlay();
@@ -774,12 +936,20 @@ function startScreenshotOverlay() {
         screenshotResolve(null);
         screenshotResolve = null;
       }
-    }, 10000);
+    }, 120000);
 
     // 1. 隐藏主窗口 + 保证每块屏的 overlay 都就绪（复用预创建 + 热插拔补建）
     if (mainWindow && !mainWindow.isDestroyed()) {
+      // 清除可能触发 expandDock/show 的定时器，防止 hide 后窗口又被 show 出来
+      if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
+      if (dockHideTimer) { clearTimeout(dockHideTimer); dockHideTimer = null; }
+
       console.log('[Window] hide triggered at:', new Error().stack);
       mainWindow.hide();
+
+      // Windows DWM 有 compositing 延迟，hide() 后窗口不会立即从屏幕上消失。
+      // 等待 ~100ms 确保窗口完全不可见后再继续，避免偶发性截到自身窗口。
+      await sleep(100);
     }
 
     try {
@@ -950,12 +1120,24 @@ function cleanupLinkCache() {
 function registerIpcHandlers() {
   /** store:get — 读取 electron-store 数据 */
   ipcMain.handle('store:get', (_event, key, defaultValue) => {
-    return store.get(key, defaultValue);
+    const value = store.get(key, defaultValue);
+    if (key === 'aiSettings') {
+      return decryptAiSettings(value);
+    }
+    return value;
   });
 
   /** store:set — 写入 electron-store 数据 */
   ipcMain.handle('store:set', (_event, key, value) => {
+    if (key === 'aiSettings') {
+      value = encryptAiSettings(value);
+    }
     store.set(key, value);
+    // 触发自动同步（如果 key 在同步范围内）
+    const engine = getEngine();
+    if (engine) {
+      engine.onStoreChanged(key);
+    }
   });
 
   /** show-reminder — 弹出待办提醒对话框 */
@@ -1129,7 +1311,9 @@ function registerIpcHandlers() {
       try {
         const fileName = path.basename(src);
         const dest = path.join(toDir, fileName);
-        await fs.promises.rename(src, dest);
+        // 使用 copyFile + unlink 替代 rename，支持跨磁盘/分区移动
+        await fs.promises.copyFile(src, dest);
+        await fs.promises.unlink(src);
         results.push({ file: src, success: true });
       } catch (err) {
         results.push({ file: src, success: false, error: err.message });
@@ -1156,6 +1340,13 @@ function registerIpcHandlers() {
     const w = Math.max(minW, Math.min(maxW, newWidth));
     // 记住用户设置的展开宽度
     dockExpandedWidth = w;
+    // 持久化到 store，重启后保持用户设置的宽度
+    try {
+      const screenW = screen.getPrimaryDisplay().size.width;
+      store.set('windowWidthPercent', Math.round((w / screenW) * 100));
+    } catch (err) {
+      console.warn('[Resize] 保存宽度百分比失败:', err.message);
+    }
     // Dock 模式下：若已展开则直接 reposition；若收起则先展开再定位
     if (!dockExpanded) expandDock('resize-window');
     else positionDockWindow(true);
@@ -1209,23 +1400,45 @@ function registerIpcHandlers() {
     }
   });
 
+  /** fetch-rendered-title — Electron 隐藏窗口渲染后提取标题（对付 CSR / 反爬） */
+  ipcMain.handle('fetch-rendered-title', async (_event, url) => {
+    const cacheKey = require('crypto').createHash('md5').update(`render:${url}`).digest('hex');
+    const cached = store.get(`linkCache.${cacheKey}`, null);
+    if (cached && (Date.now() - cached.timestamp < 24 * 60 * 60 * 1000)) {
+      return { ...cached, cached: true };
+    }
+
+    const result = await fetchRenderedTitle(url);
+    if (result.title) {
+      const cacheEntry = { ...result, timestamp: Date.now() };
+      store.set(`linkCache.${cacheKey}`, cacheEntry);
+    }
+    return result;
+  });
+
   /**
    * 抓取网页并解析 OG 元数据
    * 返回 { title, favicon, description, source, error? }
    */
   function fetchPage(url) {
     return new Promise((resolve) => {
+      const mod = url.startsWith('https') ? https : http;
+      let req = null;
       const timeout = setTimeout(() => {
-        req.destroy();
+        if (req) req.destroy();
         resolve({ title: null, favicon: null, description: null, source: 'timeout', error: 'TIMEOUT' });
       }, 3000);
 
-      const mod = url.startsWith('https') ? https : http;
-      const req = mod.get(url, {
+      req = mod.get(url, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml',
-          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'none',
+          'Sec-Fetch-User': '?1',
+          'Upgrade-Insecure-Requests': '1',
         },
         timeout: 2000,
       }, (res) => {
@@ -1260,29 +1473,38 @@ function registerIpcHandlers() {
 
         let data = '';
         let received = 0;
+        let responseSettled = false;
+        function safeResolve(value) {
+          if (!responseSettled) {
+            responseSettled = true;
+            clearTimeout(timeout);
+            resolve(value);
+          }
+        }
         res.on('data', (chunk) => {
           received += chunk.length;
           data += chunk.toString();
           // 只读前 10KB，拿到 <head> 就够了
           if (received > 10240) {
+            // 先解析并 resolve，再 destroy；否则 end 事件不会触发导致 Promise 挂起
+            safeResolve(parseMeta(data, url));
             res.destroy();
           }
         });
         res.on('end', () => {
-          clearTimeout(timeout);
-
           // 反爬检测：HTML 太短且含验证码关键词
           if (data.length < 500 && /验证|captcha|verify/i.test(data)) {
-            resolve({ title: null, favicon: null, description: null, source: 'error', error: 'captcha' });
+            safeResolve({ title: null, favicon: null, description: null, source: 'error', error: 'captcha' });
             return;
           }
-
-          const meta = parseMeta(data, url);
-          resolve(meta);
+          safeResolve(parseMeta(data, url));
         });
         res.on('error', () => {
-          clearTimeout(timeout);
-          resolve({ title: null, favicon: null, description: null, source: 'error' });
+          safeResolve({ title: null, favicon: null, description: null, source: 'error' });
+        });
+        res.on('close', () => {
+          // 兜底：如果 data 事件里已 resolve，这里不会重复执行
+          safeResolve(parseMeta(data, url));
         });
       });
       req.on('error', () => {
@@ -1297,10 +1519,11 @@ function registerIpcHandlers() {
     });
   }
 
-  /** 解析 HTML 中的 OG 元标签 */
+  /** 解析 HTML 中的 OG 元标签（增强版：支持微信、知乎、掘金等特殊结构） */
   function parseMeta(html, baseUrl) {
-    // 优先级：og:title > twitter:title > <title>
+    // 优先级：og:title > twitter:title > 特殊站点规则 > <title>
     let title = null;
+    let source = 'og-meta';
 
     const ogTitle = html.match(/<meta[^>]*property\s*=\s*["']og:title["'][^>]*content\s*=\s*["']([^"']+)["']/i)
       || html.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*property\s*=\s*["']og:title["']/i);
@@ -1313,6 +1536,43 @@ function registerIpcHandlers() {
         || html.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*name\s*=\s*["']twitter:title["']/i);
       if (twitterTitle) {
         title = decodeHtml(twitterTitle[1]);
+      }
+    }
+
+    // 特殊站点规则（微信、知乎、掘金、CSDN 等）
+    if (!title) {
+      // 微信文章：rich_media_title / activity_name
+      const wxTitle = html.match(/<h2[^>]*class\s*=\s*["'][^"]*rich_media_title["'][^>]*>([\s\S]*?)<\/h2>/i)
+        || html.match(/<div[^>]*id\s*=\s*["']activity_name["'][^>]*>([\s\S]*?)<\/div>/i);
+      if (wxTitle) {
+        title = decodeHtml(wxTitle[1].replace(/<[^>]+>/g, '').trim());
+        source = 'og-meta';
+      }
+      // 知乎：Post-Title / h1.Title
+      if (!title) {
+        const zhTitle = html.match(/<h1[^>]*class\s*=\s*["'][^"]*Post-Title["'][^>]*>([\s\S]*?)<\/h1>/i)
+          || html.match(/<h1[^>]*class\s*=\s*["'][^"]*Title["'][^>]*>([\s\S]*?)<\/h1>/i);
+        if (zhTitle) {
+          title = decodeHtml(zhTitle[1].replace(/<[^>]+>/g, '').trim());
+          source = 'og-meta';
+        }
+      }
+      // 掘金：article-title
+      if (!title) {
+        const jjTitle = html.match(/<h1[^>]*class\s*=\s*["'][^"]*article-title["'][^>]*>([\s\S]*?)<\/h1>/i);
+        if (jjTitle) {
+          title = decodeHtml(jjTitle[1].replace(/<[^>]+>/g, '').trim());
+          source = 'og-meta';
+        }
+      }
+      // CSDN：title / article-title
+      if (!title) {
+        const csdnTitle = html.match(/<h1[^>]*class\s*=\s*["'][^"]*title-article["'][^>]*>([\s\S]*?)<\/h1>/i)
+          || html.match(/<span[^>]*class\s*=\s*["'][^"]*article-title["'][^>]*>([\s\S]*?)<\/span>/i);
+        if (csdnTitle) {
+          title = decodeHtml(csdnTitle[1].replace(/<[^>]+>/g, '').trim());
+          source = 'og-meta';
+        }
       }
     }
 
@@ -1347,8 +1607,79 @@ function registerIpcHandlers() {
       description = decodeHtml(ogDesc[1]);
     }
 
-    const source = title ? 'og-meta' : 'error';
+    if (!title) source = 'error';
     return { title, favicon, description, source };
+  }
+
+  /**
+   * 用 Electron 隐藏窗口渲染页面后提取标题（对付 CSR / 反爬站点）
+   * 流程：创建 offscreen BrowserWindow → loadURL → 等待 JS 执行 → executeJavaScript 提取标题
+   */
+  async function fetchRenderedTitle(targetUrl) {
+    return new Promise((resolve) => {
+      const win = new BrowserWindow({
+        show: false,
+        width: 1280,
+        height: 720,
+        webPreferences: {
+          offscreen: true,
+          nodeIntegration: false,
+          contextIsolation: true,
+          javascript: true,
+        },
+      });
+
+      const timeout = setTimeout(() => {
+        try { win.destroy(); } catch {}
+        resolve({ title: null, favicon: null, source: 'error' });
+      }, 8000);
+
+      win.webContents.on('did-finish-load', async () => {
+        // 再等 1.5s 让 SPA 完成 JS 渲染
+        await sleep(1500);
+        try {
+          const result = await win.webContents.executeJavaScript(`
+            (() => {
+              const og = document.querySelector('meta[property="og:title"]');
+              if (og && og.content) return { title: og.content.trim(), favicon: null };
+              const tw = document.querySelector('meta[name="twitter:title"]');
+              if (tw && tw.content) return { title: tw.content.trim(), favicon: null };
+              // 微信文章
+              const wx = document.querySelector('#activity_name, .rich_media_title');
+              if (wx) return { title: wx.textContent.trim(), favicon: null };
+              // 知乎
+              const zh = document.querySelector('.Post-Title, h1.Title');
+              if (zh) return { title: zh.textContent.trim(), favicon: null };
+              // 掘金
+              const jj = document.querySelector('h1.article-title');
+              if (jj) return { title: jj.textContent.trim(), favicon: null };
+              return { title: document.title.trim(), favicon: null };
+            })()
+          `);
+          clearTimeout(timeout);
+          try { win.destroy(); } catch {}
+          if (result && result.title && result.title.length > 0 && result.title !== 'about:blank') {
+            resolve({ title: result.title, favicon: result.favicon, source: 'render' });
+          } else {
+            resolve({ title: null, favicon: null, source: 'error' });
+          }
+        } catch {
+          clearTimeout(timeout);
+          try { win.destroy(); } catch {}
+          resolve({ title: null, favicon: null, source: 'error' });
+        }
+      });
+
+      win.webContents.on('did-fail-load', () => {
+        clearTimeout(timeout);
+        try { win.destroy(); } catch {}
+        resolve({ title: null, favicon: null, source: 'error' });
+      });
+
+      win.loadURL(targetUrl, {
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      });
+    });
   }
 
   /** 解码 HTML 实体 */
@@ -1405,6 +1736,44 @@ function registerIpcHandlers() {
       try { globalShortcut.unregister(registeredShortcut); } catch {}
       console.log(`[Shortcut] 已注销: ${registeredShortcut}`);
       registeredShortcut = null;
+    }
+    return { success: true };
+  });
+
+  /**
+   * register-pin-shortcut — 注册切换钉住状态的全局快捷键
+   */
+  ipcMain.handle('register-pin-shortcut', (_event, accelerator) => {
+    if (registeredPinShortcut) {
+      try { globalShortcut.unregister(registeredPinShortcut); } catch {}
+      registeredPinShortcut = null;
+    }
+    if (!accelerator) return { success: true };
+    const normalized = platform.shortcuts.normalizeShortcut(accelerator);
+    try {
+      const registered = globalShortcut.register(normalized, () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('pin-shortcut-triggered');
+        }
+      });
+      if (registered) {
+        registeredPinShortcut = normalized;
+        console.log(`[PinShortcut] 已注册: ${normalized}`);
+        return { success: true };
+      } else {
+        return { success: false, error: '快捷键注册失败，可能已被其他程序占用' };
+      }
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  /** unregister-pin-shortcut — 注销钉住状态快捷键 */
+  ipcMain.handle('unregister-pin-shortcut', () => {
+    if (registeredPinShortcut) {
+      try { globalShortcut.unregister(registeredPinShortcut); } catch {}
+      console.log(`[PinShortcut] 已注销: ${registeredPinShortcut}`);
+      registeredPinShortcut = null;
     }
     return { success: true };
   });
@@ -1498,6 +1867,7 @@ function registerIpcHandlers() {
   /** dock:pin — 锁定展开状态 */
   ipcMain.handle('dock:pin', () => {
     dockPinned = true;
+    store.set('dockPinned', true);
     if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
     if (dockHideTimer) { clearTimeout(dockHideTimer); dockHideTimer = null; }
     if (!dockExpanded) expandDock('pin');
@@ -1508,6 +1878,7 @@ function registerIpcHandlers() {
   /** dock:unpin — 解锁，允许自动收起（鼠标离开后自然收起） */
   ipcMain.handle('dock:unpin', () => {
     dockPinned = false;
+    store.set('dockPinned', false);
     if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
     if (dockHideTimer) { clearTimeout(dockHideTimer); dockHideTimer = null; }
     dockInteracting = false;
@@ -1518,6 +1889,7 @@ function registerIpcHandlers() {
   /** dock:toggle-pin — 切换锁定 */
   ipcMain.handle('dock:toggle-pin', () => {
     dockPinned = !dockPinned;
+    store.set('dockPinned', dockPinned);
     if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
     if (dockHideTimer) { clearTimeout(dockHideTimer); dockHideTimer = null; }
     if (dockPinned) {
@@ -1600,7 +1972,7 @@ function registerIpcHandlers() {
       const workspaces = store.get('workspaces', []);
       const todosGlobal = store.get('todosGlobal', []);
       const globalQuickIcons = store.get('globalQuickIcons', []);
-      const aiSettings = store.get('aiSettings', {});
+      const aiSettings = decryptAiSettings(store.get('aiSettings', {}));
       const tokenStats = store.get('tokenStats', {});
 
       // 按工作区读取隔离数据
@@ -1728,7 +2100,7 @@ function registerIpcHandlers() {
       // 恢复所有数据键
       for (const [key, value] of Object.entries(data)) {
         if (key.startsWith('_')) continue;
-        store.set(key, value);
+        safeStoreSet(key, value);
       }
 
       return { success: true, message: '数据已恢复，建议重启应用以确保所有组件重新加载。' };
@@ -1780,15 +2152,419 @@ function registerIpcHandlers() {
       return { success: false, error: err.message };
     }
   });
+
+  // ========== 更新检查 IPC ==========
+
+  /** check-for-update — 检查更新
+   *  优先使用公开 HTTP API（无需 SecretKey），fallback 到 CloudBase SDK（兼容旧配置）
+   */
+  ipcMain.handle('check-for-update', async (_event, currentVersion) => {
+    console.log('[Update] 检查更新, 当前版本:', currentVersion);
+
+    // 发送检查中状态
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update:status', { status: 'checking', version: currentVersion });
+    }
+
+    // 版本号比较：返回负数表示 v1 < v2，0 表示相等，正数表示 v1 > v2
+    function compareVersion(v1, v2) {
+      const parts1 = String(v1).split('.').map(Number);
+      const parts2 = String(v2).split('.').map(Number);
+      const maxLen = Math.max(parts1.length, parts2.length);
+      for (let i = 0; i < maxLen; i++) {
+        const a = parts1[i] || 0;
+        const b = parts2[i] || 0;
+        if (a !== b) return a - b;
+      }
+      return 0;
+    }
+
+    // 辅助函数：统一把后端返回格式映射成前端期望的 status 格式
+    // 不再盲目相信 result.hasUpdate，而是自己做版本号比较
+    function mapResult(result) {
+      const latestVersion = result && (result.version || result.latestVersion);
+      const shouldUpdate = latestVersion && compareVersion(currentVersion, latestVersion) < 0;
+      const payload = shouldUpdate
+        ? {
+            status: 'available',
+            version: currentVersion,
+            latestVersion,
+            releaseNotes: result.message || result.releaseNotes,
+            downloadUrl: result.downloadUrl || null,
+          }
+        : {
+            status: 'latest',
+            version: currentVersion,
+          };
+      console.log('[Update] 版本比较:', currentVersion, 'vs', latestVersion, '→', payload.status);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:status', payload);
+      }
+      return result;
+    }
+
+    // ========== 公开 HTTP API（update.json）==========
+    if (UPDATE_API_URL) {
+      try {
+        const url = new URL(UPDATE_API_URL);
+        url.searchParams.set('version', currentVersion);
+        const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(8000) });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const result = await resp.json();
+        console.log('[Update] HTTP API 返回:', result);
+        return mapResult(result);
+      } catch (err) {
+        console.error('[Update] HTTP API 调用失败:', err.message);
+        const errorPayload = { status: 'error', version: currentVersion, error: err.message };
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('update:status', errorPayload);
+        }
+        return { success: false, error: err.message };
+      }
+    }
+
+    const errMsg = '未配置更新接口（UPDATE_API_URL），自动更新已禁用';
+    console.warn('[Update]', errMsg);
+    const errorPayload = { status: 'error', version: currentVersion, error: errMsg };
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('update:status', errorPayload);
+    }
+    return { success: false, error: errMsg };
+  });
+
+  // 保存下载的安装包路径，供安装步骤使用
+  let updateInstallerPath = null;
+
+  /** download-update — 下载更新安装包到临时目录
+   *  支持 HTTP 重定向（最多 5 次），自动清理失败时的临时文件
+   */
+  ipcMain.handle('download-update', async (_event, downloadUrl) => {
+    console.log('[Update] 开始下载:', downloadUrl);
+    updateInstallerPath = null;
+
+    const tmpDir = os.tmpdir();
+    const fileName = `DesktopSecretary-Update-${Date.now()}.exe`;
+    const filePath = path.join(tmpDir, fileName);
+    const MAX_REDIRECTS = 5;
+
+    return new Promise((resolve, reject) => {
+      const fileStream = fs.createWriteStream(filePath);
+      let receivedBytes = 0;
+      let totalBytes = 0;
+
+      function doDownload(url, redirectsLeft) {
+        const urlObj = new URL(url);
+        const httpModule = urlObj.protocol === 'https:' ? https : http;
+
+        const request = httpModule.get(url, (response) => {
+          // 处理 HTTP 重定向 (301/302/307/308)
+          if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+            if (redirectsLeft <= 0) {
+              fs.unlink(filePath, () => {});
+              reject(new Error('下载重定向次数过多'));
+              return;
+            }
+            console.log('[Update] 跟随重定向:', response.headers.location);
+            doDownload(response.headers.location, redirectsLeft - 1);
+            return;
+          }
+
+          if (response.statusCode !== 200) {
+            fs.unlink(filePath, () => {});
+            reject(new Error(`下载失败，HTTP ${response.statusCode}`));
+            return;
+          }
+
+          totalBytes = parseInt(response.headers['content-length'] || '0', 10);
+
+          response.on('data', (chunk) => {
+            receivedBytes += chunk.length;
+            const progress = totalBytes > 0 ? Math.round((receivedBytes / totalBytes) * 100) : 0;
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('update:status', {
+                status: 'downloading',
+                progress,
+                receivedBytes,
+                totalBytes,
+              });
+            }
+          });
+
+          response.pipe(fileStream);
+
+          fileStream.on('finish', () => {
+            updateInstallerPath = filePath;
+            console.log('[Update] 下载完成:', filePath);
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('update:status', { status: 'downloaded', installerPath: filePath });
+            }
+            resolve({ success: true, path: filePath });
+          });
+        });
+
+        request.on('error', (err) => {
+          fs.unlink(filePath, () => {});
+          console.error('[Update] 下载失败:', err);
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('update:status', { status: 'error', error: err.message });
+          }
+          reject(err);
+        });
+      }
+
+      fileStream.on('error', (err) => {
+        fs.unlink(filePath, () => {});
+        console.error('[Update] 写入文件失败:', err);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('update:status', { status: 'error', error: err.message });
+        }
+        reject(err);
+      });
+
+      doDownload(downloadUrl, MAX_REDIRECTS);
+    });
+  });
+
+  /** install-update — 打开安装程序并退出应用
+   *  最可靠的方式：直接用系统默认方式打开安装包，让用户手动完成安装向导。
+   *  避免静默安装 /S 在 oneClick:false 模式下不稳定的问题。
+   */
+  ipcMain.handle('install-update', async () => {
+    if (!updateInstallerPath || !fs.existsSync(updateInstallerPath)) {
+      return { success: false, error: '安装包不存在，请重新下载' };
+    }
+
+    console.log('[Update] 打开安装程序:', updateInstallerPath);
+
+    // 先关闭所有窗口，释放文件锁
+    BrowserWindow.getAllWindows().forEach((win) => {
+      try { if (!win.isDestroyed()) win.destroy(); } catch {}
+    });
+
+    // 用系统默认方式打开安装包（用户会看到 NSIS 安装向导）
+    shell.openPath(updateInstallerPath);
+
+    // 延迟退出应用，避免和安装向导冲突
+    setTimeout(() => {
+      app.quit();
+    }, 500);
+
+    return { success: true };
+  });
+
+  // ========== 同步相关 IPC ==========
+
+  /** sync:sendCode — 发送注册验证码 */
+  ipcMain.handle('sync:sendCode', async (_event, email) => {
+    try {
+      const auth = getAuth();
+      if (!auth) throw new Error('同步模块未初始化');
+      if (!auth.verify) throw new Error('验证码模块未初始化');
+      return await auth.verify.sendCode(email.trim().toLowerCase());
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  /** sync:register — 用户注册（需验证码） */
+  ipcMain.handle('sync:register', async (_event, username, password, code, importLocalData = true) => {
+    try {
+      const auth = getAuth();
+      if (!auth) throw new Error('同步模块未初始化');
+      const result = await auth.register(username, password, code);
+      const uid = result.uid;
+      const engine = getEngine();
+      if (engine) {
+        if (importLocalData) {
+          // 将当前顶层数据绑定到新账户并推送
+          engine.profile.bindCurrentDataToProfile(uid);
+          engine.profile.activeUid = uid;
+          engine.push().catch((err) => console.error('[Sync] 注册后首次 Push 失败:', err.message));
+        } else {
+          // 空账户注册：将当前数据归档到匿名空间，清空顶层，不推送
+          engine.profile.archiveProfile('anonymous');
+          engine.profile.clearActiveKeys();
+          engine.profile.activeUid = uid;
+          console.log('[Profile] 空账户注册，已清空本地数据');
+        }
+      }
+      return result;
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  /** sync:login — 用户登录 */
+  ipcMain.handle('sync:login', async (_event, username, password) => {
+    try {
+      const auth = getAuth();
+      if (!auth) throw new Error('同步模块未初始化');
+      const result = await auth.login(username, password);
+      const uid = result.uid;
+      const engine = getEngine();
+      if (engine) {
+        // ⭐ 关键：切换 profile 时合并匿名数据
+        await engine.switchProfile(uid, { mergeAnonymous: true });
+        engine.pull().catch((err) => console.error('[Sync] 登录后自动 Pull 失败:', err.message));
+      }
+      return result;
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  /** sync:logout — 退出登录 */
+  ipcMain.handle('sync:logout', async () => {
+    try {
+      const auth = getAuth();
+      const engine = getEngine();
+      if (!auth) throw new Error('同步模块未初始化');
+
+      // 先归档当前账户数据，再切回匿名
+      const currentUid = engine?.profile?.activeUid;
+      if (engine && currentUid && currentUid !== 'anonymous') {
+        engine.profile.archiveProfile(currentUid);
+        await engine.switchProfile('anonymous', { mergeAnonymous: false });
+      }
+
+      return await auth.logout();
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+
+
+  /** sync:getStatus — 获取登录状态 */
+  ipcMain.handle('sync:getStatus', () => {
+    const auth = getAuth();
+    if (!auth) return { isLoggedIn: false, error: '同步模块未初始化' };
+    return auth.getStatus();
+  });
+
+  /** sync:syncNow — 手动触发同步 */
+  ipcMain.handle('sync:syncNow', async () => {
+    try {
+      const engine = getEngine();
+      if (!engine) throw new Error('同步模块未初始化');
+      return await engine.sync();
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  /** sync:push — 手动上传 */
+  ipcMain.handle('sync:push', async () => {
+    try {
+      const engine = getEngine();
+      if (!engine) throw new Error('同步模块未初始化');
+      return await engine.push();
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  /** sync:pull — 手动下载 */
+  ipcMain.handle('sync:pull', async () => {
+    try {
+      const engine = getEngine();
+      if (!engine) throw new Error('同步模块未初始化');
+      return await engine.pull();
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
 }
+
+// ========== 单实例锁定（防止重复开启多个窗口）==========
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  console.log('[App] 已有实例在运行，退出当前实例');
+  app.quit();
+  return;
+}
+
+app.on('second-instance', (_event, _commandLine, _workingDirectory) => {
+  console.log('[App] 检测到第二次启动，聚焦已有窗口');
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    if (!dockExpanded && dockedEdge !== null) {
+      expandDock('second-instance');
+    }
+  }
+});
 
 app.whenReady().then(async () => {
   try {
     platform.windowOptions.applyAppLevelPlatformSetup(app);
     await initStore();
+    initSync(store, tcbApp);
+    await migrateApiKeyEncryption();
     registerIpcHandlers();
     await createWindow();
     console.log('createWindow() completed, window count:', BrowserWindow.getAllWindows().length);
+
+    // ========== electron-updater 自动更新事件监听 ==========
+    autoUpdater.on('checking-for-update', () => {
+      console.log('[AutoUpdate] 正在检查更新...');
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:status', { status: 'checking' });
+      }
+    });
+
+    autoUpdater.on('update-available', (info) => {
+      console.log('[AutoUpdate] 发现新版本:', info.version);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:status', {
+          status: 'available',
+          latestVersion: info.version,
+          releaseNotes: info.releaseNotes,
+        });
+      }
+    });
+
+    autoUpdater.on('update-not-available', () => {
+      console.log('[AutoUpdate] 当前已是最新版本');
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:status', { status: 'latest' });
+      }
+    });
+
+    autoUpdater.on('download-progress', (progress) => {
+      const percent = Math.round(progress.percent);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:status', {
+          status: 'downloading',
+          progress: percent,
+          receivedBytes: progress.transferred,
+          totalBytes: progress.total,
+        });
+      }
+    });
+
+    autoUpdater.on('update-downloaded', (info) => {
+      console.log('[AutoUpdate] 更新已下载:', info.version);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:status', { status: 'downloaded', version: info.version });
+      }
+    });
+
+    autoUpdater.on('error', (err) => {
+      console.error('[AutoUpdate] 错误:', err.message);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('update:status', { status: 'error', error: err.message });
+      }
+    });
+
+    // 应用启动后延迟 10 秒自动检查更新（避免启动时网络竞争）
+    setTimeout(() => {
+      autoUpdater.checkForUpdates().catch((err) => {
+        console.error('[AutoUpdate] 启动时检查更新失败:', err.message);
+      });
+    }, 10000);
 
     // 预创建截图 overlay（每块屏一个，常驻隐藏），截图时直接 show
     ensureOverlayReady().catch((err) => {
@@ -1796,8 +2572,8 @@ app.whenReady().then(async () => {
     });
     attachDisplayChangeListeners();
 
-    // 启动时默认展开并锁定，需手动取消图钉才允许收起
-    dockPinned = true;
+    // 启动时读取保存的锁定状态，首次默认锁定，保持展开
+    dockPinned = store.get('dockPinned', true);
     expandDock('startup');
 
     // 应用开机自启设置
@@ -1807,8 +2583,25 @@ app.whenReady().then(async () => {
     // 启动时清理过期缓存
     cleanupLinkCache();
 
+    // 启动时清理过期的临时更新安装包
+    try {
+      const tmpDir = os.tmpdir();
+      const tmpFiles = fs.readdirSync(tmpDir);
+      let cleaned = 0;
+      for (const f of tmpFiles) {
+        if (f.startsWith('DesktopSecretary-Update-') && f.endsWith('.exe')) {
+          try { fs.unlinkSync(path.join(tmpDir, f)); cleaned++; } catch {}
+        }
+      }
+      if (cleaned > 0) {
+        console.log(`[Update] 启动时清理了 ${cleaned} 个过期临时安装包`);
+      }
+    } catch (err) {
+      console.warn('[Update] 清理临时安装包失败:', err.message);
+    }
+
     // 启动时自动注册保存的快捷键
-    const savedSettings = store.get('aiSettings', {});
+    const savedSettings = decryptAiSettings(store.get('aiSettings', {}));
     if (savedSettings.shortcutKey) {
       const accelerator = platform.shortcuts.normalizeShortcut(savedSettings.shortcutKey);
       await new Promise((resolve) => {
@@ -1825,6 +2618,32 @@ app.whenReady().then(async () => {
           if (ok) {
             registeredShortcut = accelerator;
             console.log(`[Shortcut] 启动时自动注册: ${accelerator}`);
+          }
+          resolve(ok);
+        } catch (err) {
+          resolve(false);
+        }
+      });
+    }
+
+    // 启动时自动注册保存的钉住状态快捷键
+    const savedPinShortcut = store.get('pinShortcutKey', '');
+    if (savedPinShortcut) {
+      const accelerator = platform.shortcuts.normalizeShortcut(savedPinShortcut);
+      await new Promise((resolve) => {
+        if (registeredPinShortcut) {
+          try { globalShortcut.unregister(registeredPinShortcut); } catch {}
+          registeredPinShortcut = null;
+        }
+        try {
+          const ok = globalShortcut.register(accelerator, () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('pin-shortcut-triggered');
+            }
+          });
+          if (ok) {
+            registeredPinShortcut = accelerator;
+            console.log(`[PinShortcut] 启动时自动注册: ${accelerator}`);
           }
           resolve(ok);
         } catch (err) {
@@ -1854,6 +2673,8 @@ app.on('window-all-closed', () => {
 // 应用退出时清理资源
 app.on('will-quit', () => {
   globalShortcut.unregisterAll();
+  registeredShortcut = null;
+  registeredPinShortcut = null;
   destroyOverlay();
 });
 

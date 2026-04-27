@@ -98,3 +98,53 @@ export const SCREENSHOT_PROMPT = `请分析这张截图，提取待办事项。�
 返回 JSON 格式：{tasks: [{title, deadline, priority}]}`;
 
 export const MEMORY_SUMMARY_PROMPT = `请总结以下用户与AI的对话，提取关键信息（项目名称、待办、决策、文件路径），用于后续检索。摘要不超过100字，同时提取3-5个关键词。`;
+
+export const URL_TITLE_PROMPT = `根据以下 URL 生成一个简洁的中文标题（不超过10个字），只返回标题本身，不要有任何解释、标点或引号。`; 
+
+export const URL_TITLE_SYSTEM_PROMPT = `你是一个 URL 标题生成助手。根据用户提供的 URL，生成一个简洁的中文标题（不超过10个字）。只返回标题文本，不要任何解释、标点或引号。`; 
+
+// ===== Token 统计工具 =====
+
+export function extractTokens(data, content) {
+  if (data?.usage?.total_tokens) return data.usage.total_tokens;
+  if (data?.usage) {
+    const u = data.usage;
+    return (u.prompt_tokens || 0) + (u.completion_tokens || 0) + (u.total_tokens || 0);
+  }
+  if (!content) return 0;
+  const cjk = (content.match(/[\u4e00-\u9fff]/g) || []).length;
+  const ascii = content.length - cjk;
+  return cjk * 2 + ascii;
+}
+
+export function todayStr() { return new Date().toISOString().slice(0, 10); }
+export function monthStr() { return new Date().toISOString().slice(0, 7); }
+
+export async function loadTokenStats(api) {
+  const saved = await api.storeGet('tokenStats', null);
+  if (!saved) return { today: 0, month: 0, lastRequest: 0, date: todayStr(), monthKey: monthStr() };
+  const t = todayStr();
+  const m = monthStr();
+  return {
+    today: saved.date === t ? (saved.today || 0) : 0,
+    month: saved.monthKey === m ? (saved.month || 0) : 0,
+    lastRequest: saved.lastRequest || 0,
+    date: t,
+    monthKey: m,
+  };
+}
+
+export async function recordTokenUsage(api, tokens) {
+  const stats = await loadTokenStats(api);
+  stats.today += tokens;
+  stats.month += tokens;
+  stats.lastRequest = tokens;
+  stats.date = todayStr();
+  stats.monthKey = monthStr();
+  await api.storeSet('tokenStats', stats);
+  window.dispatchEvent(new CustomEvent('token-stats-updated', {
+    detail: { today: stats.today, month: stats.month, lastRequest: stats.lastRequest }
+  }));
+  return stats;
+}
+

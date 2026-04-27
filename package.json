@@ -1,13 +1,14 @@
 {
   "name": "desktop-secretary",
-  "version": "1.0.0",
+  "version": "1.0.7",
   "description": "A glassmorphism desktop assistant pinned to the right side of your screen",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dev": "concurrently \"vite\" \"electron .\"",
     "build": "vite build",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "publish": "npm run dist && node publish.js"
   },
   "build": {
     "productName": "DesktopSecretary",
@@ -20,8 +21,12 @@
       "preload.js",
       "main/**/*",
       "dist/**/*",
+      "config/**/*",
       "package.json",
-      "node_modules/**/*"
+      "node_modules/**/*",
+      "!.env",
+      "!.env.*",
+      "!.gitignore"
     ],
     "asar": true,
     "asarUnpack": [
@@ -31,6 +36,10 @@
     ],
     "electronDownload": {
       "mirror": "https://npmmirror.com/mirrors/electron/"
+    },
+    "publish": {
+      "provider": "generic",
+      "url": "https://ds-update-1420931574.cos.ap-guangzhou.myqcloud.com/updates"
     },
     "win": {
       "target": "nsis",
@@ -79,16 +88,22 @@
     }
   },
   "dependencies": {
+    "@cloudbase/node-sdk": "^3.18.1",
+    "bcryptjs": "^3.0.3",
     "electron-store": "^8.2.0",
+    "electron-updater": "^6.8.3",
     "get-windows": "^9.3.0",
     "lucide-react": "^0.469.0",
     "node-screenshots": "^0.2.8",
+    "nodemailer": "^8.0.6",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.2",
+    "cos-nodejs-sdk-v5": "^2.15.4",
+    "dotenv": "^17.4.2",
     "electron": "^30.5.1",
     "electron-builder": "^26.8.1",
     "playwright": "^1.59.1",

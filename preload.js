@@ -74,6 +74,9 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   /** 主进程抓取网页 OG 元数据（无 CORS 限制，2s 超时，24h 缓存） */
   fetchLinkPreview: (url) => ipcRenderer.invoke('fetch-link-preview', url),
 
+  /** 主进程隐藏窗口渲染后提取标题（对付 CSR / 反爬） */
+  fetchRenderedTitle: (url) => ipcRenderer.invoke('fetch-rendered-title', url),
+
   // ========== 全局快捷键 ==========
 
   /**
@@ -98,6 +101,25 @@ contextBridge.exposeInMainWorld('desktopAPI', {
     const handler = () => callback();
     ipcRenderer.on('shortcut-triggered', handler);
     return () => ipcRenderer.removeListener('shortcut-triggered', handler);
+  },
+
+  /**
+   * 注册切换钉住状态的全局快捷键
+   */
+  registerPinShortcut: (accelerator) => ipcRenderer.invoke('register-pin-shortcut', accelerator),
+
+  /**
+   * 注销切换钉住状态的全局快捷键
+   */
+  unregisterPinShortcut: () => ipcRenderer.invoke('unregister-pin-shortcut'),
+
+  /**
+   * 监听钉住状态快捷键触发事件
+   */
+  onPinShortcutTriggered: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('pin-shortcut-triggered', handler);
+    return () => ipcRenderer.removeListener('pin-shortcut-triggered', handler);
   },
 
   // ========== 截图 overlay ==========
@@ -188,6 +210,24 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   /** 设置开机自启状态 */
   setAutoLaunch: (enabled) => ipcRenderer.invoke('set-auto-launch', enabled),
 
+  // ========== 更新检查 ==========
+
+  /** 触发检查更新 */
+  checkForUpdate: (currentVersion) => ipcRenderer.invoke('check-for-update', currentVersion),
+
+  /** 监听更新状态推送 */
+  onUpdateStatus: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('update:status', handler);
+    return () => ipcRenderer.removeListener('update:status', handler);
+  },
+
+  /** 下载更新安装包 */
+  downloadUpdate: (url) => ipcRenderer.invoke('download-update', url),
+
+  /** 静默安装并退出 */
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+
   /** 导出数据（Excel + JSON 备份） */
   exportData: () => ipcRenderer.invoke('data:export'),
 
@@ -196,6 +236,46 @@ contextBridge.exposeInMainWorld('desktopAPI', {
 
   /** 获取存储统计 */
   getDataStats: () => ipcRenderer.invoke('data:stats'),
+
+  // ========== 云端同步 ==========
+
+  /** 发送注册验证码 */
+  syncSendCode: (email) => ipcRenderer.invoke('sync:sendCode', email),
+
+  /** 用户注册（需验证码） */
+  syncRegister: (username, password, code, importLocalData = true) => ipcRenderer.invoke('sync:register', username, password, code, importLocalData),
+
+  /** 用户登录 */
+  syncLogin: (username, password) => ipcRenderer.invoke('sync:login', username, password),
+
+  /** 退出登录 */
+  syncLogout: () => ipcRenderer.invoke('sync:logout'),
+
+  /** 获取同步登录状态 */
+  syncGetStatus: () => ipcRenderer.invoke('sync:getStatus'),
+
+  /** 手动触发双向同步 */
+  syncNow: () => ipcRenderer.invoke('sync:syncNow'),
+
+  /** 手动上传 */
+  syncPush: () => ipcRenderer.invoke('sync:push'),
+
+  /** 手动下载 */
+  syncPull: () => ipcRenderer.invoke('sync:pull'),
+
+  /** 监听同步状态变化 */
+  onSyncStatusChange: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('sync:status-changed', handler);
+    return () => ipcRenderer.removeListener('sync:status-changed', handler);
+  },
+
+  /** 监听 Profile 切换事件（账户切换后刷新数据） */
+  onProfileSwitched: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('profile:switched', handler);
+    return () => ipcRenderer.removeListener('profile:switched', handler);
+  },
 
   /** 监听 Dock 状态变化 */
   onDockStateChanged: (callback) => {
@@ -223,4 +303,19 @@ contextBridge.exposeInMainWorld('desktopAPI', {
     ipcRenderer.on('dock:edge-changed', handler);
     return () => ipcRenderer.removeListener('dock:edge-changed', handler);
   },
+
+  // _appVersion 已废弃，版本号由 Vite 构建时通过 __APP_VERSION__ 注入
+  // 保留此注释以避免破坏可能引用该字段的第三方代码
+});
+
+// 额外暴露 electronAPI（设置页检查更新等功能使用）
+contextBridge.exposeInMainWorld('electronAPI', {
+  checkForUpdate: (version) => ipcRenderer.invoke('check-for-update', version),
+  onUpdateStatus: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('update:status', handler);
+    return () => ipcRenderer.removeListener('update:status', handler);
+  },
+  downloadUpdate: (url) => ipcRenderer.invoke('download-update', url),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
 });

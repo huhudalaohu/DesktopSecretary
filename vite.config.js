@@ -1,9 +1,15 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import fs from 'fs';
+
+const packageJson = JSON.parse(fs.readFileSync('./package.json', 'utf-8'));
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    __APP_VERSION__: JSON.stringify(packageJson.version),
+  },
   // 开发模式下渲染进程构建配置
   root: '.',                // 项目根目录
   base: './',               // 使用相对路径，适配 file:// 协议加载

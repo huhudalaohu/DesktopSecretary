@@ -191,13 +191,13 @@ export default function Timeline({ activeWorkspace, reminderLevels, onFocusTodo 
   const isEmpty = workspaceTodos.length === 0;
 
   return (
-    <div className="px-4 mb-2 select-none">
+    <div className="px-4 mt-[3px] mb-2 select-none">
       {/* 头部标签 */}
       <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1">
             <Clock size={10} className="text-blue-400" />
-            <span className="text-[10px] font-medium text-gray-500">时间轴</span>
+            <span className="text-[10px] font-normal text-[#999]">时间轴</span>
           </div>
           {/* 月视图 / 全部 切换开关 */}
           <button
@@ -213,13 +213,13 @@ export default function Timeline({ activeWorkspace, reminderLevels, onFocusTodo 
               }`}
             />
           </button>
-          <span className="text-[7px] text-gray-400">{showAll ? '全部' : '月'}</span>
+          <span className="text-[10px] font-normal text-[#999]">{showAll ? '全部' : '月'}</span>
         </div>
         <div className="flex items-center gap-2">
           {needsScroll && (
-            <span className="text-[7px] text-gray-400">滚轮查看更多</span>
+            <span className="text-[10px] font-normal text-[#999]">滚轮查看更多</span>
           )}
-          <span className="text-[9px] text-gray-300">{isEmpty ? 0 : visibleTodos.length} 个待办</span>
+          <span className="text-[10px] font-normal text-[#999]">{isEmpty ? 0 : visibleTodos.length} 个待办</span>
         </div>
       </div>
 
@@ -257,7 +257,7 @@ export default function Timeline({ activeWorkspace, reminderLevels, onFocusTodo 
                 return (
                   <div
                     key={`mon-${i}`}
-                    className={`absolute text-[7px] text-gray-400 tabular-nums whitespace-nowrap ${
+                    className={`absolute text-[10px] font-normal text-[#999] tabular-nums whitespace-nowrap ${
                       nearLeft ? 'left-0' : ''
                     }`}
                     style={nearLeft ? {} : { left: `${seg.mondayLeft}%`, transform: 'translateX(-50%)' }}
@@ -292,7 +292,7 @@ export default function Timeline({ activeWorkspace, reminderLevels, onFocusTodo 
                   />
                   {/* Tooltip */}
                   <div className={`absolute bottom-full mb-1.5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 ${tooltipAlign}`}>
-                    <div className="bg-gray-800 text-white text-[9px] px-2 py-1 rounded-md whitespace-nowrap shadow-lg">
+                    <div className="bg-gray-800 text-white text-[10px] font-normal px-2 py-1 rounded-md whitespace-nowrap shadow-lg">
                       <div className="font-medium">{todo.text}</div>
                       <div className="text-gray-300 mt-0.5">
                         {isReminder ? `提醒 ${formatShortDate(time)} ${formatTime(time)}` : `创建 ${formatShortDate(time)}`}
@@ -310,10 +310,10 @@ export default function Timeline({ activeWorkspace, reminderLevels, onFocusTodo 
 
       {/* 底部时间标签 — 显示视口起止 */}
       <div className="flex justify-between mt-0.5">
-        <span className="text-[8px] text-gray-300 tabular-nums">
+        <span className="text-[10px] font-normal text-[#999] tabular-nums">
           {isEmpty ? '--' : (hasReminder ? formatShortDate(viewportStart) + ' ' + formatTime(viewportStart) : formatShortDate(viewportStart))}
         </span>
-        <span className="text-[8px] text-gray-300 tabular-nums">
+        <span className="text-[10px] font-normal text-[#999] tabular-nums">
           {isEmpty ? '--' : (hasReminder ? formatShortDate(viewportEnd) + ' ' + formatTime(viewportEnd) : formatShortDate(viewportEnd))}
         </span>
       </div>

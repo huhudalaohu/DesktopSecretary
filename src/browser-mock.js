@@ -114,6 +114,9 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
     registerShortcut: () => resolve({ success: true }),
     unregisterShortcut: () => resolve({ success: true }),
     onShortcutTriggered: () => () => {},
+    registerPinShortcut: () => resolve({ success: true }),
+    unregisterPinShortcut: () => resolve({ success: true }),
+    onPinShortcutTriggered: () => () => {},
     startScreenshotOverlay: () => resolve(null),
     onScreenshotStart: () => () => {},
     screenshotCrop: () => resolve({ success: false }),
@@ -130,6 +133,20 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
     onDockEdgeChanged: () => () => {},
     getAutoLaunch: () => resolve(false),
     setAutoLaunch: () => resolve({ success: true }),
+
+    checkForUpdate: async (currentVersion) => {
+      await new Promise((r) => setTimeout(r, 600));
+      return { success: true, hasUpdate: false, currentVersion, latestVersion: currentVersion };
+    },
+    onUpdateStatus: () => () => {},
+    downloadUpdate: async () => {
+      await new Promise((r) => setTimeout(r, 1500));
+      return { success: true };
+    },
+    installUpdate: async () => {
+      alert('安装（浏览器预览模式下不可用）');
+      return { success: true };
+    },
 
     exportData: async () => {
       const data = {
@@ -204,6 +221,23 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
         fileSizeFormatted,
         counts: { workspaces: workspaces.length, todos, links, fileShortcuts, globalIcons },
       });
+    },
+  };
+
+  // 额外暴露 electronAPI mock（设置页检查更新等功能使用）
+  window.electronAPI = {
+    checkForUpdate: async (version) => {
+      await new Promise((r) => setTimeout(r, 600));
+      return { success: true, hasUpdate: false, currentVersion: version, latestVersion: version, status: 'latest' };
+    },
+    onUpdateStatus: () => () => {},
+    downloadUpdate: async () => {
+      await new Promise((r) => setTimeout(r, 1500));
+      return { success: true };
+    },
+    installUpdate: async () => {
+      alert('安装（浏览器预览模式下不可用）');
+      return { success: true };
     },
   };
 

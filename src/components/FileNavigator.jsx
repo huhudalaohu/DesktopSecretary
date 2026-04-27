@@ -236,7 +236,7 @@ export default function FileNavigator({ activeWorkspace }) {
     <div onClick={closeContextMenu}>
       {/* 标题栏 + 视图切换 */}
       <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wider">文件导航</span>
+        <span className="text-[15px] font-semibold text-[#333]">文件导航</span>
         <div className="flex items-center gap-1">
           <button
             onClick={() => handleViewChange('icons')}
@@ -275,7 +275,7 @@ export default function FileNavigator({ activeWorkspace }) {
         } shadow-sm`}
       >
         {shortcuts.length === 0 ? (
-          <div className="text-xs text-gray-300 py-4 text-center">
+          <div className="text-[12px] font-normal text-[#ccc] py-4 text-center">
             从文件资源管理器拖拽文件、文件夹或快捷方式到此处添加
           </div>
         ) : viewMode === 'icons' ? (
@@ -304,7 +304,7 @@ export default function FileNavigator({ activeWorkspace }) {
                   <div className="absolute -left-1 top-2 bottom-2 w-0.5 bg-blue-500 rounded-full shadow-[0_0_10px_rgba(59,130,246,1)] z-10 pointer-events-none" />
                 )}
                 <FileTypeIcon path={item.path} size={24} />
-                <span className="text-[10px] text-gray-600 truncate w-full text-center">
+                <span className="text-[14px] font-normal text-[#333] truncate w-full text-center">
                   {item.name}
                 </span>
               </div>
@@ -347,8 +347,8 @@ export default function FileNavigator({ activeWorkspace }) {
                   <div className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 bg-blue-500 rounded-full shadow-[0_0_10px_rgba(59,130,246,1)] z-10 pointer-events-none" />
                 )}
                 <FileTypeIcon path={item.path} size={18} />
-                <span className="text-xs text-gray-700 truncate w-24 flex-shrink-0">{item.name}</span>
-                <span className="text-[10px] text-gray-400 truncate flex-1 min-w-0">{truncatePath(item.path)}</span>
+                <span className="text-[14px] font-normal text-[#333] truncate w-24 flex-shrink-0">{item.name}</span>
+                <span className="text-[12px] font-normal text-[#999] truncate flex-1 min-w-0">{truncatePath(item.path)}</span>
               </div>
             ))}
             {/* 末尾插入区 */}
@@ -375,7 +375,7 @@ export default function FileNavigator({ activeWorkspace }) {
         >
           <button
             onClick={() => handleDelete(contextMenu.item.id)}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-red-500 hover:bg-[#EBEBEB]"
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-red-500 hover:bg-[#EBEBEB]"
           >
             <Trash2 size={12} /> 删除快捷方式
           </button>

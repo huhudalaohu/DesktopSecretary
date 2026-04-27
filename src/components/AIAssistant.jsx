@@ -45,12 +45,12 @@ export default function AIAssistant({
 
   return (
     <div>
-      <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">AI 助手</div>
+      <div className="text-[15px] font-semibold text-[#333] mb-2">AI 助手</div>
 
       <div className="rounded-lg bg-white border border-[#E5E5E5] p-3 space-y-3 shadow-sm">
         {/* Token 消耗 */}
         <div className="rounded-md bg-white border border-[#E5E5E5] px-2.5 py-1.5 space-y-1">
-          <div className="flex items-center justify-between text-[10px] text-gray-400">
+          <div className="flex items-center justify-between text-[12px] font-normal text-[#999]">
             <span>今日: <span className={tokenStats.today > dailyLimit ? 'text-red-500' : 'text-blue-500'}>{formatTokens(tokenStats.today)}</span></span>
             <span>本月: <span className="text-gray-600">{formatTokens(tokenStats.month)}</span></span>
             <span>单次: <span className="text-blue-500">{formatTokens(tokenStats.lastRequest)}</span></span>
@@ -79,7 +79,7 @@ export default function AIAssistant({
 
         {/* 状态提示 */}
         {screenshotStatus !== SCREENSHOT_STATUS.IDLE && statusMessage && (
-          <div className={`flex items-center gap-1.5 text-[10px] ${statusDisplay?.color || 'text-gray-400'}`}>
+          <div className={`flex items-center gap-1.5 text-[11px] font-normal ${statusDisplay?.color || 'text-[#999]'}`}>
             {statusDisplay?.icon}
             {statusMessage}
           </div>
@@ -89,14 +89,14 @@ export default function AIAssistant({
         {aiResult && (
           <div className="rounded-md bg-white border border-[#E5E5E5] p-2">
             {aiResult.error ? (
-              <div className="text-[10px] text-red-500">{aiResult.error}</div>
+              <div className="text-[11px] font-normal text-red-500">{aiResult.error}</div>
             ) : aiResult.tasks && aiResult.tasks.length > 0 ? (
               <div className="space-y-1">
-                <div className="text-[10px] text-blue-500">已创建 1 条待办</div>
+                <div className="text-[11px] font-normal text-blue-500">已创建 1 条待办</div>
                 {(() => {
                   const task = aiResult.tasks[0];
                   return (
-                    <div className="text-[10px] text-gray-600 pl-2">
+                    <div className="text-[14px] font-normal text-[#333] pl-2">
                       {task.priority === 'urgent' && <span className="text-red-500 mr-1">[紧急]</span>}
                       {task.priority === 'high' && <span className="text-orange-500 mr-1">[高]</span>}
                       {task.assigner && <span className="text-blue-500 mr-1">【{task.assigner}】</span>}
@@ -107,7 +107,7 @@ export default function AIAssistant({
                 })()}
               </div>
             ) : (
-              <div className="text-[10px] text-gray-400">
+              <div className="text-[12px] font-normal text-[#999]">
                 {aiResult.raw || '未发现明确待办事项'}
               </div>
             )}

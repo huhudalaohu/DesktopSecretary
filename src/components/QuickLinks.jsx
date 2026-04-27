@@ -17,6 +17,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronRight, ChevronDown, Pencil, Trash2, GripVertical, Loader2, X, Circle, Plus } from 'lucide-react';
+import { MODEL_PROVIDERS, URL_TITLE_SYSTEM_PROMPT, extractTokens, recordTokenUsage } from '../ai-config';
 
 const api = window.desktopAPI;
 
@@ -42,6 +43,11 @@ const DEFAULT_GROUPS = {
     expanded: true,
     links: [],
   },
+  social: {
+    name: '社交媒体',
+    expanded: true,
+    links: [],
+  },
   uncategorized: {
     name: '未分类',
     expanded: true,
@@ -49,7 +55,7 @@ const DEFAULT_GROUPS = {
   },
 };
 
-const GROUP_ORDER = ['docs', 'workflow', 'dataPlatform', 'thirdParty', 'uncategorized'];
+const GROUP_ORDER = ['docs', 'workflow', 'dataPlatform', 'thirdParty', 'social', 'uncategorized'];
 
 // 分组色条颜色（用于左侧 2px 色条区分）
 const GROUP_ACCENT = {
@@ -57,6 +63,7 @@ const GROUP_ACCENT = {
   workflow: 'bg-amber-400',
   dataPlatform: 'bg-cyan-400',
   thirdParty: 'bg-purple-400',
+  social: 'bg-pink-400',
   uncategorized: 'bg-gray-300',
 };
 
@@ -177,6 +184,24 @@ function classifyUrl(hostname, pathname) {
   if (h.includes('clickhouse') || h.includes('hive') || h.includes('presto') || h.includes('spark')) return 'dataPlatform';
   if (h.includes('dolphinscheduler') || h.includes('airflow') || h.includes('azkaban')) return 'dataPlatform';
 
+  // ===== 第三方工具 / 内容平台 =====
+  // 社交媒体
+  if (h.includes('bilibili.com') || h.includes('bilibili.cn') || h.includes('b23.tv')) return 'social';
+  if (h.includes('xiaohongshu.com') || h.includes('xhslink.com')) return 'social';
+  if (h.includes('zhihu.com')) return 'social';
+  if (h.includes('douyin.com') || h.includes('iesdouyin.com')) return 'social';
+  if (h.includes('weibo.com') || h.includes('weibo.cn')) return 'social';
+  // 第三方工具 / 内容平台
+  if (h.includes('csdn.net') || h.includes('csdn.com')) return 'thirdParty';
+  if (h.includes('github.com')) return 'thirdParty';
+  if (h.includes('juejin.cn')) return 'thirdParty';
+  if (h.includes('youku.com')) return 'thirdParty';
+  if (h.includes('iqiyi.com')) return 'thirdParty';
+  if (h.includes('v.qq.com')) return 'thirdParty';
+  if (h.includes('taobao.com') || h.includes('tmall.com')) return 'thirdParty';
+  if (h.includes('jd.com')) return 'thirdParty';
+  if (h.includes('moonshot.cn') || h.includes('kimi.moonshot.cn')) return 'thirdParty';
+
   return 'uncategorized';
 }
 
@@ -206,6 +231,8 @@ function getPathPrefixHint(url) {
       if (/\/spreadsheets?\//.test(p)) return '表格';
       if (/\/presentation\//.test(p)) return '演示文稿';
     }
+    // Kimi
+    if (h.includes('moonshot') || h.includes('kimi')) return 'Kimi';
   } catch {}
   return null;
 }
@@ -227,10 +254,46 @@ function getNameFromUrlParams(url) {
 function guessTitleFromPath(url) {
   try {
     const u = new URL(url);
+    const h = u.hostname.toLowerCase();
+    const p = u.pathname;
     const segments = u.pathname.split('/').filter(Boolean);
     const last = segments[segments.length - 1] || '';
+
+    // 哔哩哔哩
+    if (h.includes('bilibili') || h.includes('b23.tv')) {
+      const bvMatch = p.match(/\/video\/(BV\w+)/);
+      if (bvMatch) return `哔哩哔哩视频 ${bvMatch[1]}`;
+      return '哔哩哔哩';
+    }
+    // 小红书
+    if (h.includes('xiaohongshu') || h.includes('xhslink')) return '小红书';
+    // 知乎
+    if (h.includes('zhihu')) {
+      const qMatch = p.match(/\/question\/(\d+)/);
+      if (qMatch) return `知乎问题 ${qMatch[1]}`;
+      return '知乎';
+    }
+    // 抖音
+    if (h.includes('douyin')) return '抖音';
+    // CSDN
+    if (h.includes('csdn')) {
+      if (last) return decodeURIComponent(last).trim();
+      return 'CSDN';
+    }
+    // GitHub
+    if (h.includes('github')) {
+      const match = p.match(/^\/([^\/]+)\/([^\/]+)/);
+      if (match) return `GitHub: ${match[2]}`;
+      return 'GitHub';
+    }
+    // 掘金
+    if (h.includes('juejin')) return '掘金';
+    // Kimi
+    if (h.includes('moonshot') || h.includes('kimi')) return 'Kimi';
+
+    // 通用规则
     if (last && !/^[a-zA-Z0-9_-]{10,}$/.test(last)) {
-      return decodeURIComponent(last);
+      return decodeURIComponent(last).trim();
     }
     return u.hostname;
   } catch {
@@ -246,23 +309,59 @@ function splitClipboard(text) {
   return null;
 }
 
-// ===== 降级命名（超时后跳过 AI，直接兜底） =====
-async function resolveTitle(url) {
+/**
+ * 从分享文本中提取 URL 和标题
+ * 支持 URL 在文本中间的情况（抖音/小红书/微信分享格式）
+ */
+function extractShareInfo(text) {
+  // 1. 先尝试标准格式：标题在前，URL 在后
+  const simpleMatch = text.match(/^(.+?)\s+(https?:\/\/\S+)$/);
+  if (simpleMatch) {
+    return { name: cleanShareTitle(simpleMatch[1]), url: simpleMatch[2].trim() };
+  }
+
+  // 2. URL 在中间的通用提取
+  const urlMatch = text.match(/(https?:\/\/[^\s]+)/);
+  if (!urlMatch) return null;
+
+  const url = urlMatch[1].trim();
+  // URL 前面的文字作为标题候选
+  const beforeUrl = text.slice(0, text.indexOf(urlMatch[0])).trim();
+  // URL 后面的文字（通常是引导语，优先级低）
+  const afterUrl = text.slice(text.indexOf(urlMatch[0]) + urlMatch[0].length).trim();
+
+  // 优先用 URL 前面的文字，如果前面没有再用后面
+  const name = beforeUrl || afterUrl;
+  return { name: cleanShareTitle(name), url };
+}
+
+/** 清理分享文本中的格式标记和引导语 */
+function cleanShareTitle(raw) {
+  if (!raw) return '';
+  return raw
+    .replace(/复制此链接，打开.*?搜索，直接观看视频！/g, '')
+    .replace(/复制此链接，打开.*?搜索.*?查看/g, '')
+    .replace(/点击.*?链接.*?查看/g, '')
+    .replace(/#[^\s#]+/g, '') // 移除 hashtag
+    .replace(/\d+\.\d+\s+[a-zA-Z]+:\//g, '') // 移除 "1.28 Cho:/" 抖音格式标记
+    .replace(/\d{2}\/\d{2}\s+/g, '') // 移除 "07/26 " 日期前缀
+    .replace(/[a-zA-Z]@[a-zA-Z]\.[a-zA-Z]{2}\s+/g, '') // 移除 "f@O.Xz " 类标记
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// ===== 四层渐进式识别 =====
+async function resolveTitle(url, aiSettings) {
   // 0层：URL 参数
   const paramTitle = getNameFromUrlParams(url);
   if (paramTitle) {
     return { title: paramTitle, favicon: getFaviconUrl(url), source: 'url-param' };
   }
 
-  // 1+2层：主进程抓取（含缓存，3s 硬超时）
+  // 1+2层：主进程 HTTP 抓取（含缓存，3s 硬超时）
+  let httpResult = null;
   try {
     const preview = await api.fetchLinkPreview(url);
-
-    // 超时 → 直接兜底，不调 AI（避免二次等待）
-    if (preview.error === 'TIMEOUT') {
-      return timeoutFallback(url);
-    }
-
     if (preview.cached && preview.title) {
       return { title: preview.title, favicon: preview.favicon || getFaviconUrl(url), source: 'cache' };
     }
@@ -276,18 +375,72 @@ async function resolveTitle(url) {
     if (preview.error === 'not_found') {
       return { title: '页面不存在', favicon: getFaviconUrl(url), source: 'error-not-found' };
     }
+    httpResult = preview;
   } catch {
-    return timeoutFallback(url);
+    httpResult = { error: 'exception' };
   }
 
-  // 其他错误 → 路径兜底（不调 AI，省 token）
+  // 3层：Electron 隐藏窗口渲染（HTTP 失败/超时/反爬时启用，约 3-5s）
+  if (!httpResult?.title || httpResult?.error === 'TIMEOUT' || httpResult?.error === 'captcha') {
+    try {
+      const renderResult = await api.fetchRenderedTitle(url);
+      if (renderResult.title) {
+        return { title: renderResult.title, favicon: renderResult.favicon || getFaviconUrl(url), source: 'render' };
+      }
+    } catch (err) {
+      console.error('[Render] 渲染提取失败:', err);
+    }
+  }
+
+  // 4层：AI 兜底（根据 URL 生成标题）
+  if (aiSettings?.apiKey) {
+    const aiResult = await resolveTitleWithAI(url, aiSettings);
+    if (aiResult) return aiResult;
+  }
+
+  // 5层：本地路径规则兜底
   return timeoutFallback(url);
+}
+
+async function resolveTitleWithAI(url, aiSettings) {
+  if (!aiSettings || !aiSettings.apiKey) return null;
+  const provider = MODEL_PROVIDERS[aiSettings.provider];
+  const baseUrl = aiSettings.provider === 'custom' ? aiSettings.customBaseUrl : provider.baseUrl;
+  if (!baseUrl) return null;
+
+  const messages = [
+    { role: 'system', content: URL_TITLE_SYSTEM_PROMPT },
+    { role: 'user', content: `URL: ${url}` },
+  ];
+
+  const body = aiSettings.provider === 'custom'
+    ? { ...provider.buildBody(messages), model: aiSettings.customModel || '' }
+    : provider.buildBody(messages);
+  const headers = provider.headers(aiSettings.apiKey);
+
+  try {
+    const resp = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    const content = provider.extractContent(data);
+    if (content) {
+      const tokensUsed = extractTokens(data, content);
+      await recordTokenUsage(api, tokensUsed);
+      return { title: content.trim().replace(/^["']|["']$/g, ''), favicon: getFaviconUrl(url), source: 'ai' };
+    }
+  } catch (err) {
+    console.error('[AI Title] 识别失败:', err);
+  }
+  return null;
 }
 
 function timeoutFallback(url) {
   const prefix = getPathPrefixHint(url);
   const pathName = guessTitleFromPath(url);
-  const title = prefix || pathName;
+  const title = (prefix || pathName).trim();
   return { title, favicon: getFaviconUrl(url), source: 'fallback' };
 }
 
@@ -306,6 +459,8 @@ function SourceBadge({ source }) {
     'url-param': ['秒开', 'green'],
     'cache': ['缓存', 'green'],
     'og-meta': ['已抓取', 'blue'],
+    'render': ['渲染抓取', 'blue'],
+    'ai': ['AI识别', 'purple'],
     'fallback': ['未识别', 'gray'],
     'error-need-login': ['需登录', 'orange'],
     'error-not-found': ['404', 'red'],
@@ -315,14 +470,15 @@ function SourceBadge({ source }) {
   const colors = {
     green: ['text-green-500', 'bg-green-500'],
     blue: ['text-blue-500', 'bg-blue-500'],
+    purple: ['text-purple-500', 'bg-purple-500'],
     gray: ['text-gray-400', 'bg-gray-400'],
     orange: ['text-orange-500', 'bg-orange-500'],
     red: ['text-red-500', 'bg-red-500'],
   };
   const [textCls, dotCls] = colors[b[1]] || colors.gray;
   return (
-    <span className={`flex items-center gap-0.5 text-[9px] ${textCls} flex-shrink-0`}>
-      <span className={`w-1 h-1 rounded-full ${dotCls} inline-block`} />
+    <span className={`flex items-center gap-0.5 text-[11px] font-normal text-[#999] flex-shrink-0`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${dotCls} inline-block`} />
       {b[0]}
     </span>
   );
@@ -365,6 +521,14 @@ export default function QuickLinks({ activeWorkspace }) {
   const globalTimersRef = useRef({}); // iconId → interval
   const globalCancelledRef = useRef(new Set()); // 已取消的全局图标 id
 
+  // AI 配置（用于 URL 标题识别兜底）
+  const [aiSettings, setAiSettings] = useState(null);
+  useEffect(() => {
+    api.storeGet('aiSettings', {}).then((saved) => {
+      if (saved && saved.apiKey) setAiSettings(saved);
+    });
+  }, []);
+
   // 存储键按工作区分隔
   const storeKey = `quickLinks:${activeWorkspace}`;
 
@@ -405,11 +569,18 @@ export default function QuickLinks({ activeWorkspace }) {
         api.storeSet(storeKey, DEFAULT_GROUPS);
       } else {
         const migrated = migrateGroups(saved);
-        if (migrated !== saved) {
-          setGroups(migrated);
-          api.storeSet(storeKey, migrated);
-        } else {
-          setGroups(saved);
+        let final = migrated !== saved ? migrated : saved;
+        // 补齐新增分组（如社交媒体）
+        let needsUpdate = false;
+        for (const [key, def] of Object.entries(DEFAULT_GROUPS)) {
+          if (!final[key]) {
+            final = { ...final, [key]: def };
+            needsUpdate = true;
+          }
+        }
+        setGroups(final);
+        if (needsUpdate || migrated !== saved) {
+          api.storeSet(storeKey, final);
         }
       }
     });
@@ -536,12 +707,16 @@ export default function QuickLinks({ activeWorkspace }) {
     const rawText = (e.clipboardData || window.clipboardData).getData('text').trim();
     if (!rawText) return;
 
-    // 0层：剪贴板分割
+    // 0层：剪贴板分割 / 分享文本提取
     const split = splitClipboard(rawText);
+    const extracted = extractShareInfo(rawText);
     let url, preParsedTitle = null;
     if (split) {
       url = split.url;
       preParsedTitle = split.name;
+    } else if (extracted) {
+      url = extracted.url;
+      preParsedTitle = extracted.name;
     } else {
       url = rawText;
       if (!/^https?:\/\//.test(url)) url = 'https://' + url;
@@ -596,7 +771,7 @@ export default function QuickLinks({ activeWorkspace }) {
     }
 
     try {
-      const { title, favicon, source } = await resolveTitle(url);
+      const { title, favicon, source } = await resolveTitle(url, aiSettings);
 
       // 检查是否已被取消
       if (cancelledRef.current.has(tempId)) {
@@ -645,13 +820,14 @@ export default function QuickLinks({ activeWorkspace }) {
   };
 
   const confirmEdit = (groupId, linkId) => {
-    if (!editingTitle.trim()) return;
+    const trimmed = editingTitle.trim();
+    if (!trimmed) return;
     const updated = {
       ...groups,
       [groupId]: {
         ...groups[groupId],
         links: groups[groupId].links.map((l) =>
-          l.id === linkId ? { ...l, title: editingTitle.trim(), titleSource: 'manual' } : l
+          l.id === linkId ? { ...l, title: trimmed, titleSource: 'manual' } : l
         ),
       },
     };
@@ -805,7 +981,7 @@ export default function QuickLinks({ activeWorkspace }) {
     }
 
     try {
-      const { title, favicon, source } = await resolveTitle(url);
+      const { title, favicon, source } = await resolveTitle(url, aiSettings);
       if (globalCancelledRef.current.has(tempId)) {
         globalCancelledRef.current.delete(tempId);
         releaseSlot();
@@ -914,11 +1090,11 @@ export default function QuickLinks({ activeWorkspace }) {
 
   return (
     <div>
-      <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">快速入口</div>
+      <div className="text-[15px] font-semibold text-[#333] mb-2">快速入口</div>
 
       <div className="rounded-lg bg-white border border-[#E5E5E5] p-2.5 shadow-sm">
         {/* 全局快捷图标栏 */}
-        {globalNotice && <div className="mb-1 text-[10px] text-amber-500">{globalNotice}</div>}
+        {globalNotice && <div className="mb-1 text-[11px] font-normal text-amber-500">{globalNotice}</div>}
         <div className="mb-2">
           <div className="flex flex-wrap gap-2 content-start max-h-[102px] overflow-hidden">
             {globalIcons.map((icon, index) => {
@@ -939,7 +1115,7 @@ export default function QuickLinks({ activeWorkspace }) {
                     }}
                     onBlur={confirmEditGlobalIcon}
                     onClick={(e) => e.stopPropagation()}
-                    className="w-24 px-2 py-1 rounded-md text-xs bg-white text-gray-800 border border-[#0099FF] outline-none flex-shrink-0"
+                    className="w-24 px-2 py-1 rounded-md text-[14px] font-normal text-[#333] bg-white border border-[#0099FF] outline-none flex-shrink-0"
                   />
                 );
               }
@@ -951,7 +1127,7 @@ export default function QuickLinks({ activeWorkspace }) {
                     className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white border border-[#E5E5E5] flex-shrink-0 min-w-[80px]"
                   >
                     <SkeletonBar />
-                    <span className="text-[9px] text-[#0099FF] flex-shrink-0">
+                    <span className="text-[11px] font-normal text-[#0099FF] flex-shrink-0">
                       {cd !== undefined ? `${cd}s` : '...'}
                     </span>
                     <button
@@ -1049,7 +1225,7 @@ export default function QuickLinks({ activeWorkspace }) {
                   }}
                   onClick={(e) => e.stopPropagation()}
                   placeholder="输入链接..."
-                  className="w-28 px-2 py-1 rounded-md text-xs bg-white text-gray-800 border border-[#0099FF] outline-none flex-shrink-0"
+                  className="w-28 px-2 py-1 rounded-md text-[14px] font-normal text-[#333] bg-white border border-[#0099FF] outline-none flex-shrink-0"
                 />
               </form>
             ) : (
@@ -1093,16 +1269,16 @@ export default function QuickLinks({ activeWorkspace }) {
           <input
             ref={inputRef}
             type="text"
-            placeholder="粘贴文档链接，自动识别分类"
+            placeholder="粘贴链接，自动识别并命名"
             onPaste={handlePaste}
             onKeyDown={handleInputKeydown}
-            className="w-full bg-white border border-[#E5E5E5] rounded-md px-2.5 py-1.5 text-xs text-gray-800 placeholder-gray-400 outline-none focus:border-[#0099FF] transition-colors"
+            className="w-full bg-white border border-[#E5E5E5] rounded-md px-2.5 py-1.5 text-[14px] font-normal text-[#333] placeholder-[#999] outline-none focus:border-[#0099FF] transition-colors"
           />
           {addingStatus === 'fetching' && (
-            <div className="text-[10px] text-blue-500 mt-1 px-1">正在获取信息...</div>
+            <div className="text-[11px] font-normal text-blue-500 mt-1 px-1">正在获取信息...</div>
           )}
           {addingStatus === 'done' && (
-            <div className="text-[10px] text-green-500 mt-1 px-1">已添加</div>
+            <div className="text-[11px] font-normal text-green-500 mt-1 px-1">已添加</div>
           )}
         </div>
 
@@ -1131,14 +1307,14 @@ export default function QuickLinks({ activeWorkspace }) {
                 ) : (
                   <ChevronRight size={11} className="text-gray-400 flex-shrink-0" />
                 )}
-                <span className="text-[10px] font-medium text-gray-500 flex-1 truncate">{group.name}</span>
-                <span className="text-[9px] text-gray-300 flex-shrink-0">{linkCount}</span>
+                <span className="text-[13px] font-semibold text-[#555] flex-1 truncate">{group.name}</span>
+                <span className="text-[11px] font-normal text-[#bbb] flex-shrink-0">{linkCount}</span>
               </div>
 
               {group.expanded && (
                 <div className="ml-3 border-l border-[#E5E5E5]">
                   {linkCount === 0 ? (
-                    <div className="text-[10px] text-gray-300 py-1 px-2 ml-1">
+                    <div className="text-[12px] font-normal text-[#ccc] py-1 px-2 ml-1">
                       暂无快捷方式，粘贴链接即可添加
                     </div>
                   ) : (
@@ -1185,7 +1361,7 @@ export default function QuickLinks({ activeWorkspace }) {
                           {isLoading && !isTimedOut ? (
                             <>
                               <SkeletonBar />
-                              <span className="text-[9px] text-[#0099FF] flex-shrink-0">
+                              <span className="text-[11px] font-normal text-[#0099FF] flex-shrink-0">
                                 {cd !== undefined ? `${cd}s` : '...'}
                               </span>
                               <button
@@ -1261,7 +1437,7 @@ export default function QuickLinks({ activeWorkspace }) {
                 <>
                   <button
                     onClick={() => { cancelGlobalRecognition(contextMenu.icon.id); setContextMenu(null); }}
-                    className="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-[#EBEBEB] transition-colors"
+                    className="w-full text-left px-3 py-1.5 text-[13px] text-red-500 hover:bg-[#EBEBEB] transition-colors"
                   >
                     取消识别
                   </button>
@@ -1270,7 +1446,7 @@ export default function QuickLinks({ activeWorkspace }) {
                 <>
                   <button
                     onClick={() => { setEditingGlobalId(contextMenu.icon.id); setEditingGlobalTitle(contextMenu.icon.title); setContextMenu(null); }}
-                    className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-[#EBEBEB] transition-colors"
+                    className="w-full text-left px-3 py-1.5 text-[13px] text-[#555] hover:bg-[#EBEBEB] transition-colors"
                   >
                     编辑名称
                   </button>

@@ -9,7 +9,7 @@
  * - 双击标签重命名
  */
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Plus } from 'lucide-react';
 
 /**
@@ -41,7 +41,7 @@ function gradientColor(index, total, startHex = '#0259BB', endHex = '#B3D9FF') {
   return { rgb: `rgb(${r}, ${g}, ${b})`, r, g, b };
 }
 
-export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd, onDelete, onReorder, onRename }) {
+export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd, onDelete, onReorder, onRename, onDuplicate }) {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState('');
   const [renamingId, setRenamingId] = useState(null);
@@ -49,14 +49,35 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
   const [dragIndex, setDragIndex] = useState(null);
   const [dropIndex, setDropIndex] = useState(null);
   const [contextMenu, setContextMenu] = useState(null); // { x, y, wsId }
+  const scrollContainerRef = useRef(null);
 
-  // 提交新工作区
-  const handleSubmit = (e) => {
-    e.preventDefault();
+  // 激活工作区变化时，自动滚动到可视区域
+  useEffect(() => {
+    if (!scrollContainerRef.current || !active) return;
+    const el = scrollContainerRef.current.querySelector(`[data-ws-id="${active}"]`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    }
+  }, [active]);
+
+  // 提交新工作区（Enter 或失焦时触发，用 ref 防重复）
+  const didSubmitRef = useRef(false);
+  const submitNewWorkspace = () => {
+    if (didSubmitRef.current) return;
     const trimmed = newName.trim();
-    if (trimmed) onAdd(trimmed);
+    if (trimmed) {
+      didSubmitRef.current = true;
+      onAdd(trimmed);
+    }
     setNewName('');
     setAdding(false);
+    setTimeout(() => { didSubmitRef.current = false; }, 100);
+  };
+  const cancelNewWorkspace = () => {
+    didSubmitRef.current = true;
+    setNewName('');
+    setAdding(false);
+    setTimeout(() => { didSubmitRef.current = false; }, 100);
   };
 
   // 确认重命名
@@ -78,6 +99,7 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
       `}</style>
       <div>
         <div
+          ref={scrollContainerRef}
           className="edge-tabs-scroll flex items-end gap-0.5 overflow-x-auto pl-1 pr-2 pt-1.5"
           onContextMenu={(e) => e.preventDefault()}
           onWheel={(e) => {
@@ -108,6 +130,7 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
             ) : (
               <div
                 key={ws.id}
+                data-ws-id={ws.id}
                 draggable
                 role="button"
                 tabIndex={0}
@@ -154,8 +177,8 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
                   ${dragIndex === index ? 'opacity-40' : ''}
                   ${dropIndex === index && dragIndex !== index ? 'border-l-2 border-[#0078D4]' : ''}
                   ${isActive
-                    ? 'bg-white text-[#202124]'
-                    : 'bg-[#E8E8E8] text-[#5F6368] hover:bg-[#DCDCDC]'
+                    ? 'bg-white text-[#333] font-semibold'
+                    : 'bg-[#E8E8E8] text-[#999] hover:bg-[#DCDCDC] font-normal'
                   }
                 `}
                 style={{ fontFamily: "'D-DIN', sans-serif" }}
@@ -183,16 +206,18 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
 
           {/* 添加按钮 */}
           {adding ? (
-            <form onSubmit={handleSubmit} className="mb-0.5">
-              <input
-                autoFocus
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onBlur={() => { setAdding(false); setNewName(''); }}
-                placeholder="名称..."
-                className="px-2 py-1 rounded-t-lg text-[13px] bg-white text-gray-800 border border-[#E0E0E0] outline-none focus:border-[#0078D4] w-20"
-              />
-            </form>
+            <input
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submitNewWorkspace();
+                if (e.key === 'Escape') cancelNewWorkspace();
+              }}
+              onBlur={submitNewWorkspace}
+              placeholder="名称..."
+              className="mb-0.5 px-2 py-1 rounded-t-lg text-[13px] bg-white text-gray-800 border border-[#E0E0E0] outline-none focus:border-[#0078D4] w-20"
+            />
           ) : (
             <button
               onClick={() => setAdding(true)}
@@ -203,7 +228,7 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
           )}
         </div>
 
-        {/* 右键删除菜单 */}
+        {/* 右键菜单 */}
         {contextMenu && (
           <>
             <div
@@ -214,6 +239,15 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
               className="fixed z-[9999] bg-white border border-[#E5E5E5] rounded-lg py-1 shadow-lg min-w-[80px]"
               style={{ left: contextMenu.x, top: contextMenu.y }}
             >
+              <button
+                onClick={() => {
+                  if (onDuplicate) onDuplicate(contextMenu.wsId);
+                  setContextMenu(null);
+                }}
+                className="w-full text-left text-[11px] px-3 py-1.5 text-gray-600 hover:bg-gray-50"
+              >
+                复制
+              </button>
               <button
                 onClick={() => {
                   onDelete(contextMenu.wsId);

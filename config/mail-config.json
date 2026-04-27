@@ -1,0 +1,11 @@
+{
+  "_comment": "邮件服务配置，用于发送注册验证码。支持 QQ邮箱 / 163邮箱 / 腾讯企业邮 / 阿里云邮箱等",
+  "host": "smtp.qq.com",
+  "port": 465,
+  "secure": true,
+  "auth": {
+    "user": "你的邮箱地址@qq.com",
+    "pass": "你的SMTP授权码（不是登录密码）"
+  },
+  "fromName": "DesktopSecretary"
+}

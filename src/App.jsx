@@ -10,14 +10,18 @@ import AIAssistant from './components/AIAssistant';
 import QuickLinks from './components/QuickLinks';
 import Timeline from './components/Timeline';
 import ReminderLevelSettings, { DEFAULT_REMINDER_LEVELS } from './components/ReminderLevelSettings';
+import SyncPanel from './components/SyncPanel';
 import {
   MODEL_PROVIDERS,
   PROVIDER_KEYS,
   DEFAULT_AI_SETTINGS,
   SCREENSHOT_PROMPT,
   MEMORY_SUMMARY_PROMPT,
+  extractTokens,
+  loadTokenStats,
+  recordTokenUsage,
 } from './ai-config';
-import { X, Pin, PinOff, Settings, Key, Eye, EyeOff, ChevronDown, Trash2 } from 'lucide-react';
+import { X, Pin, PinOff, Settings, Key, Eye, EyeOff, ChevronDown, Trash2, RotateCw, Download, CheckCircle, ArrowUpCircle, AlertCircle } from 'lucide-react';
 
 const api = window.desktopAPI;
 
@@ -55,10 +59,16 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const settingsPanelRef = useRef(null);
   const settingsButtonRef = useRef(null);
+
+  // 回收站面板
+  const trashPanelRef = useRef(null);
+  const trashButtonRef = useRef(null);
   const [showKey, setShowKey] = useState(false);
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS);
   const [editingShortcut, setEditingShortcut] = useState(false);
   const [shortcutInput, setShortcutInput] = useState('');
+  const [editingPinShortcut, setEditingPinShortcut] = useState(false);
+  const [pinShortcutInput, setPinShortcutInput] = useState('');
   const [testResult, setTestResult] = useState(null);
   const [testing, setTesting] = useState(false);
   const [textTestResult, setTextTestResult] = useState(null);
@@ -66,6 +76,7 @@ export default function App() {
   const [snapHintEdge, setSnapHintEdge] = useState(null);
   const [settingsSaveMsg, setSettingsSaveMsg] = useState(null);
   const [autoLaunch, setAutoLaunch] = useState(false);
+  const [fontScale, setFontScale] = useState(1.0);
 
   // 时间提醒层级配置
   const [reminderLevels, setReminderLevels] = useState(DEFAULT_REMINDER_LEVELS);
@@ -77,6 +88,10 @@ export default function App() {
   const [dataActionMsg, setDataActionMsg] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+
+  // 更新检查
+  const [updateStatus, setUpdateStatus] = useState(null);
+  const [updateInfo, setUpdateInfo] = useState(null);
 
   // ========== 截图工作流状态（从 AIAssistant 提升） ==========
   const [screenshot, setScreenshot] = useState(null);
@@ -102,46 +117,6 @@ export default function App() {
     ERROR: 'error',
   };
 
-  function extractTokens(data, content) {
-    if (data?.usage?.total_tokens) return data.usage.total_tokens;
-    if (data?.usage) {
-      const u = data.usage;
-      return (u.prompt_tokens || 0) + (u.completion_tokens || 0) + (u.total_tokens || 0);
-    }
-    if (!content) return 0;
-    const cjk = (content.match(/[\u4e00-\u9fff]/g) || []).length;
-    const ascii = (content.match(/[a-zA-Z0-9]+/g) || []).length;
-    return cjk * 2 + ascii;
-  }
-
-  function todayStr() { return new Date().toISOString().slice(0, 10); }
-  function monthStr() { return new Date().toISOString().slice(0, 7); }
-
-  async function loadTokenStats() {
-    const saved = await api.storeGet('tokenStats', null);
-    if (!saved) return { today: 0, month: 0, lastRequest: 0, date: todayStr(), monthKey: monthStr() };
-    const t = todayStr();
-    const m = monthStr();
-    return {
-      today: saved.date === t ? (saved.today || 0) : 0,
-      month: saved.monthKey === m ? (saved.month || 0) : 0,
-      lastRequest: saved.lastRequest || 0,
-      date: t,
-      monthKey: m,
-    };
-  }
-
-  async function recordTokenUsage(tokens) {
-    const stats = await loadTokenStats();
-    stats.today += tokens;
-    stats.month += tokens;
-    stats.lastRequest = tokens;
-    stats.date = todayStr();
-    stats.monthKey = monthStr();
-    await api.storeSet('tokenStats', stats);
-    setTokenStats({ today: stats.today, month: stats.month, lastRequest: stats.lastRequest });
-  }
-
   function formatTokens(n) {
     if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
     if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
@@ -154,7 +129,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    loadTokenStats().then((s) => setTokenStats({ today: s.today, month: s.month, lastRequest: s.lastRequest }));
+    loadTokenStats(api).then((s) => setTokenStats({ today: s.today, month: s.month, lastRequest: s.lastRequest }));
   }, []);
 
   const handleScreenshotAndAnalyze = useCallback(async () => {
@@ -260,7 +235,7 @@ export default function App() {
       }
 
       const tokensUsed = extractTokens(data, content);
-      await recordTokenUsage(tokensUsed);
+      await recordTokenUsage(api, tokensUsed);
       setAiResult(result);
 
       if (result.tasks && result.tasks.length > 0) {
@@ -323,6 +298,15 @@ export default function App() {
     return cleanup;
   }, [handleScreenshotAndAnalyze]);
 
+  // 监听更新状态推送
+  useEffect(() => {
+    const cleanup = api.onUpdateStatus((data) => {
+      setUpdateStatus(data.status);
+      setUpdateInfo(data);
+    });
+    return cleanup;
+  }, []);
+
   // 设置面板：点击面板/按钮之外任意处自动收起
   useEffect(() => {
     if (!showSettings) return;
@@ -337,33 +321,72 @@ export default function App() {
     return () => document.removeEventListener('mousedown', onMouseDown);
   }, [showSettings]);
 
+  // 回收站面板：点击面板/按钮之外任意处自动收起
   useEffect(() => {
+    if (!showTrash) return;
+    const onMouseDown = (e) => {
+      const panel = trashPanelRef.current;
+      const btn = trashButtonRef.current;
+      if (panel && panel.contains(e.target)) return;
+      if (btn && btn.contains(e.target)) return;
+      setShowTrash(false);
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    return () => document.removeEventListener('mousedown', onMouseDown);
+  }, [showTrash]);
+
+  // 加载所有业务数据的函数（用于初始化和 Profile 切换时刷新）
+  const reloadAllData = useCallback(() => {
     api.storeGet('workspaces', []).then((ws) => {
-      if (ws.length > 0) {
+      if (ws && ws.length > 0) {
         setWorkspaces(ws);
         setActiveWorkspace(ws[0].id);
+      } else {
+        setWorkspaces([]);
+        setActiveWorkspace(null);
       }
     });
+    api.storeGet('reminderLevels', null).then((saved) => {
+      if (saved && Array.isArray(saved) && saved.length > 0) {
+        setReminderLevels(saved);
+      }
+    });
+    api.storeGet('trashedWorkspaces', []).then((saved) => setTrashedWorkspaces(saved || []));
+    api.storeGet('trashedTodos', []).then((saved) => setTrashedTodos(saved || []));
+  }, []);
+
+  useEffect(() => {
+    reloadAllData();
+
     api.storeGet('aiSettings', DEFAULT_AI_SETTINGS).then((saved) => {
       const merged = { ...DEFAULT_AI_SETTINGS, ...saved };
       setAiSettings(merged);
       setShortcutInput(merged.shortcutKey || 'CmdOrCtrl+Shift+A');
     });
 
-    api.getAutoLaunch().then((enabled) => setAutoLaunch(!!enabled));
-
-    // 加载时间提醒层级配置
-    api.storeGet('reminderLevels', null).then((saved) => {
-      if (saved && Array.isArray(saved) && saved.length > 0) {
-        setReminderLevels(saved);
-      }
+    api.storeGet('pinShortcutKey', '').then((saved) => {
+      setPinShortcutInput(saved || '');
     });
 
-    // 加载回收站
-    api.storeGet('trashedWorkspaces', []).then((saved) => setTrashedWorkspaces(saved || []));
-    api.storeGet('trashedTodos', []).then((saved) => setTrashedTodos(saved || []));
+    api.getAutoLaunch().then((enabled) => setAutoLaunch(!!enabled));
 
+    // 加载字号缩放设置
+    api.storeGet('fontScale', 1.0).then((saved) => {
+      const scale = typeof saved === 'number' ? saved : 1.0;
+      setFontScale(scale);
+    });
 
+    // 监听回收站变化（TodoList 删除待办后触发刷新）
+    const onTrashUpdated = () => {
+      api.storeGet('trashedWorkspaces', []).then((saved) => setTrashedWorkspaces(saved || []));
+      api.storeGet('trashedTodos', []).then((saved) => setTrashedTodos(saved || []));
+    };
+    window.addEventListener('trash-updated', onTrashUpdated);
+
+    // ⭐ 监听 Profile 切换事件（账户切换后刷新所有数据）
+    const cleanupProfile = api.onProfileSwitched?.(() => {
+      reloadAllData();
+    }) || (() => {});
 
     // 加载存储统计
     api.getDataStats().then((stats) => {
@@ -384,13 +407,26 @@ export default function App() {
     const cleanupHint = api.onDockSnapHint?.((data) => {
       setSnapHintEdge(data?.edge ?? null);
     }) || (() => {});
-    return () => { cleanupState(); cleanupHint(); };
-  }, []);
+    return () => {
+      window.removeEventListener('trash-updated', onTrashUpdated);
+      cleanupProfile();
+      cleanupState();
+      cleanupHint();
+    };
+  }, [reloadAllData]);
 
   const handleTogglePin = useCallback(async () => {
     const result = await api.dockTogglePin();
     setPinned(result.pinned);
   }, []);
+
+  // 监听钉住状态快捷键触发
+  useEffect(() => {
+    const cleanup = api.onPinShortcutTriggered(() => {
+      handleTogglePin();
+    });
+    return cleanup;
+  }, [handleTogglePin]);
 
   const addWorkspace = async (name) => {
     const id = `ws-${Date.now()}`;
@@ -405,7 +441,9 @@ export default function App() {
     const wsToTrash = workspaces.find((ws) => ws.id === id);
     if (wsToTrash) {
       const trashed = await api.storeGet('trashedWorkspaces', []);
-      await api.storeSet('trashedWorkspaces', [{ ...wsToTrash, trashedAt: Date.now() }, ...trashed]);
+      const newTrashed = [{ ...wsToTrash, trashedAt: Date.now() }, ...trashed];
+      await api.storeSet('trashedWorkspaces', newTrashed);
+      setTrashedWorkspaces(newTrashed);
     }
     const updated = workspaces.filter((ws) => ws.id !== id);
     setWorkspaces(updated);
@@ -419,6 +457,30 @@ export default function App() {
     const updated = workspaces.map((ws) => ws.id === id ? { ...ws, name: newName } : ws);
     setWorkspaces(updated);
     await api.storeSet('workspaces', updated);
+  };
+
+  const duplicateWorkspace = async (id) => {
+    const ws = workspaces.find((w) => w.id === id);
+    if (!ws) return;
+
+    const newId = `ws-${Date.now()}`;
+    const newName = `${ws.name} 副本`;
+    const updatedWorkspaces = [...workspaces, { id: newId, name: newName }];
+    setWorkspaces(updatedWorkspaces);
+    setActiveWorkspace(newId);
+    await api.storeSet('workspaces', updatedWorkspaces);
+
+    // 复制快速链接
+    const wsLinks = await api.storeGet(`quickLinks:${id}`, {});
+    if (wsLinks && Object.keys(wsLinks).length > 0) {
+      await api.storeSet(`quickLinks:${newId}`, JSON.parse(JSON.stringify(wsLinks)));
+    }
+
+    // 复制文件快捷方式
+    const wsFileShortcuts = await api.storeGet(`fileShortcuts:${id}`, []);
+    if (wsFileShortcuts.length > 0) {
+      await api.storeSet(`fileShortcuts:${newId}`, JSON.parse(JSON.stringify(wsFileShortcuts)));
+    }
   };
 
   const reorderWorkspaces = async (fromIndex, toIndex) => {
@@ -437,6 +499,43 @@ export default function App() {
       setSettingsSaveMsg({ type: 'error', text: `保存失败: ${err?.message || '未知错误'}` });
     }
     setTimeout(() => setSettingsSaveMsg(null), 2000);
+  };
+
+  // Vite 构建时自动注入版本号，与 package.json 保持同步
+  const CURRENT_APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '1.0.3';
+
+  const handleCheckUpdate = async () => {
+    setUpdateStatus('checking');
+    setUpdateInfo(null);
+    try {
+      await api.checkForUpdate(CURRENT_APP_VERSION);
+    } catch (err) {
+      setUpdateStatus('error');
+      setUpdateInfo({ error: err.message });
+    }
+  };
+
+  const handleDownloadUpdate = async () => {
+    if (!updateInfo?.downloadUrl) {
+      setUpdateStatus('error');
+      setUpdateInfo({ error: '下载链接不可用' });
+      return;
+    }
+    try {
+      await api.downloadUpdate(updateInfo.downloadUrl);
+    } catch (err) {
+      setUpdateStatus('error');
+      setUpdateInfo({ error: err.message });
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    try {
+      await api.installUpdate();
+    } catch (err) {
+      setUpdateStatus('error');
+      setUpdateInfo({ error: err.message });
+    }
   };
 
   const handleExportData = async () => {
@@ -558,6 +657,21 @@ export default function App() {
     }
   };
 
+  const handleSavePinShortcut = async () => {
+    const key = pinShortcutInput.trim();
+    if (!key) {
+      await api.unregisterPinShortcut();
+      await api.storeSet('pinShortcutKey', '');
+      setEditingPinShortcut(false);
+      return;
+    }
+    const result = await api.registerPinShortcut(key);
+    if (result.success) {
+      await api.storeSet('pinShortcutKey', key);
+      setEditingPinShortcut(false);
+    }
+  };
+
   const handleTestConnection = async () => {
     setTesting(true);
     setTestResult(null);
@@ -591,6 +705,8 @@ export default function App() {
       } else {
         const data = await resp.json();
         const content = provider.extractContent(data);
+        const tokensUsed = extractTokens(data, content);
+        await recordTokenUsage(api, tokensUsed);
         setTestResult({ success: true, message: `连接成功! 模型: ${body.model}, 回复: ${content.slice(0, 50)}` });
       }
     } catch (err) {
@@ -634,6 +750,8 @@ export default function App() {
         try { data = JSON.parse(respText); } catch { data = null; }
         if (data) {
           const content = provider.extractContent(data);
+          const tokensUsed = extractTokens(data, content);
+          await recordTokenUsage(api, tokensUsed);
           setTextTestResult({ success: true, message: `成功! 回复: ${content.slice(0, 150)}` });
         } else {
           setTextTestResult({ success: false, message: `非JSON响应: ${respText.slice(0, 300)}` });
@@ -650,14 +768,9 @@ export default function App() {
 
   return (
     <div className="h-full flex flex-col bg-white rounded-xl border border-[#E5E5E5] shadow-sm overflow-hidden relative">
-      {/* 边缘吸附高亮提示 */}
-      {snapHintEdge && (
-        <div className={`snap-hint snap-hint--${snapHintEdge}`} aria-hidden="true" />
-      )}
-
-      {/* 标题栏 */}
+      {/* 标题栏 — 不随字号缩放 */}
       <div className="flex items-center justify-between px-4 py-2 drag-region">
-        <span className="text-sm font-medium text-gray-800">DesktopSecretary</span>
+        <span className="text-[18px] font-semibold text-[#1a1a1a]">DesktopSecretary</span>
         <div className="flex items-center gap-1">
           <button
             onClick={handleTogglePin}
@@ -679,7 +792,14 @@ export default function App() {
         </div>
       </div>
 
-      {/* 待办列表 */}
+      {/* 字号缩放区域（除顶部标题外全部按比例缩放） */}
+      <div style={{ zoom: fontScale }} className="flex-1 flex flex-col overflow-hidden">
+        {/* 边缘吸附高亮提示 */}
+        {snapHintEdge && (
+          <div className={`snap-hint snap-hint--${snapHintEdge}`} aria-hidden="true" />
+        )}
+
+        {/* 待办列表 */}
       <div className="px-4 pb-2">
         <TodoList
           workspaces={workspaces}
@@ -701,6 +821,7 @@ export default function App() {
         onDelete={deleteWorkspace}
         onReorder={reorderWorkspaces}
         onRename={renameWorkspace}
+        onDuplicate={duplicateWorkspace}
       />
 
       {/* 待办时间轴 */}
@@ -711,7 +832,7 @@ export default function App() {
       />
 
       {/* 模块区域 */}
-      <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-4">
+      <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-6">
         <QuickLinks activeWorkspace={activeWorkspace} />
         <FileNavigator activeWorkspace={activeWorkspace} />
         <AIAssistant
@@ -726,10 +847,11 @@ export default function App() {
         />
       </div>
 
-      {/* 设置面板 */}
+      {/* 设置面板 — 固定字号，不受全局 fontScale 影响 */}
       {showSettings && (
         <div
           ref={settingsPanelRef}
+          style={{ zoom: 1 / fontScale }}
           className="mx-4 mb-2 rounded-lg bg-[#F0F0F0] border border-[#D4D4D4] p-3 space-y-3 shadow-md max-h-[50vh] overflow-y-auto"
         >
           {/* 设置标题 */}
@@ -763,7 +885,34 @@ export default function App() {
                 />
               </button>
             </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-gray-500">界面字号</span>
+              <div className="flex gap-1">
+                {[
+                  { label: '小', value: 0.9 },
+                  { label: '中', value: 1.0 },
+                  { label: '大', value: 1.1 },
+                ].map((opt) => (
+                  <button
+                    key={opt.label}
+                    onClick={async () => {
+                      setFontScale(opt.value);
+                      await api.storeSet('fontScale', opt.value);
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] transition-colors ${
+                      Math.abs(fontScale - opt.value) < 0.01
+                        ? 'bg-[#0099FF] text-white'
+                        : 'bg-[#F5F5F5] text-gray-600 hover:bg-[#EBEBEB]'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </section>
+
+          <SyncPanel />
 
           {/* ===== AI 配置 ===== */}
           <section className="bg-white rounded-md p-2.5 space-y-2">
@@ -940,6 +1089,53 @@ export default function App() {
               </div>
             )}
             <div className="text-[9px] text-gray-400">全局快捷键，无需点击按钮即可截图</div>
+
+            {/* 钉住状态快捷键 */}
+            <div className="pt-1 border-t border-[#E5E5E5]">
+              <div className="text-[9px] text-gray-400 mb-1">切换窗口钉住/释放</div>
+              {editingPinShortcut ? (
+                <div className="flex gap-1">
+                  <input
+                    autoFocus
+                    value={pinShortcutInput}
+                    onChange={(e) => setPinShortcutInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      e.preventDefault();
+                      const parts = [];
+                      if (e.ctrlKey || e.metaKey) parts.push('Ctrl');
+                      if (e.shiftKey) parts.push('Shift');
+                      if (e.altKey) parts.push('Alt');
+                      const key = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+                      if (!['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) {
+                        parts.push(key);
+                        setPinShortcutInput(parts.join('+'));
+                      }
+                    }}
+                    placeholder="按下快捷键组合..."
+                    className="flex-1 px-2 py-1 text-[10px] rounded bg-white border border-[#E5E5E5] text-gray-800 placeholder-gray-300 outline-none focus:border-[#0099FF]"
+                  />
+                  <button onClick={handleSavePinShortcut} className="px-2 py-1 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[10px]">保存</button>
+                  <button
+                    onClick={() => { setEditingPinShortcut(false); setPinShortcutInput(pinShortcutInput || ''); }}
+                    className="px-2 py-1 rounded bg-[#F5F5F5] text-gray-500 text-[10px]"
+                  >
+                    取消
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <code className="flex-1 px-2 py-1 text-[10px] rounded bg-[#F5F5F5] border border-[#E5E5E5] text-gray-600">
+                    {pinShortcutInput || '未设置'}
+                  </code>
+                  <button
+                    onClick={() => setEditingPinShortcut(true)}
+                    className="px-2 py-1 rounded bg-[#F5F5F5] hover:bg-[#EBEBEB] text-gray-500 text-[10px]"
+                  >
+                    修改
+                  </button>
+                </div>
+              )}
+            </div>
           </section>
 
           {/* ===== 时间提醒层级 ===== */}
@@ -1000,12 +1196,109 @@ export default function App() {
               Excel 用于查看历史，JSON 用于换电脑时完整恢复。
             </div>
           </section>
+
+          {/* ===== 关于 / 更新检查 ===== */}
+          <section className="bg-white rounded-md p-2.5 space-y-2">
+            <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">关于</h3>
+
+            <div className="flex items-center justify-between">
+              <div className="text-[10px] text-gray-500">
+                当前版本: <span className="font-medium text-gray-700">{CURRENT_APP_VERSION}</span>
+              </div>
+              <button
+                onClick={handleCheckUpdate}
+                disabled={updateStatus === 'checking' || updateStatus === 'downloading'}
+                className="px-2 py-1 rounded bg-[#F5F5F5] hover:bg-[#EBEBEB] text-gray-600 text-[10px] transition-colors disabled:opacity-50 border border-[#E5E5E5] flex items-center gap-1"
+              >
+                {updateStatus === 'checking' ? (
+                  <>
+                    <RotateCw size={10} className="animate-spin" />
+                    检查中...
+                  </>
+                ) : (
+                  <>
+                    <ArrowUpCircle size={10} />
+                    检查更新
+                  </>
+                )}
+              </button>
+            </div>
+
+            {updateStatus === 'latest' && (
+              <div className="text-[10px] rounded-md px-2 py-1.5 text-green-600 bg-green-50 border border-green-200 flex items-center gap-1">
+                <CheckCircle size={10} />
+                已是最新版本
+              </div>
+            )}
+
+            {updateStatus === 'available' && updateInfo && (
+              <div className="space-y-1.5">
+                <div className="text-[10px] rounded-md px-2 py-1.5 text-amber-600 bg-amber-50 border border-amber-200 flex items-center gap-1">
+                  <ArrowUpCircle size={10} />
+                  发现新版本 {updateInfo.latestVersion}
+                </div>
+                {updateInfo.releaseNotes && (
+                  <div className="text-[9px] text-gray-400 leading-relaxed">{updateInfo.releaseNotes}</div>
+                )}
+                <button
+                  onClick={handleDownloadUpdate}
+                  className="w-full py-1 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[10px] transition-colors flex items-center justify-center gap-1"
+                >
+                  <Download size={10} />
+                  下载更新
+                </button>
+              </div>
+            )}
+
+            {updateStatus === 'downloading' && (
+              <div className="space-y-1.5">
+                <div className="text-[10px] rounded-md px-2 py-1.5 text-blue-600 bg-blue-50 border border-blue-200 flex items-center gap-1">
+                  <RotateCw size={10} className="animate-spin" />
+                  正在下载更新{updateInfo?.progress !== undefined ? ` (${updateInfo.progress}%)` : ''}
+                </div>
+                {updateInfo?.progress !== undefined && (
+                  <div className="h-1.5 w-full bg-gray-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-[#0099FF] rounded-full transition-all duration-300"
+                      style={{ width: `${updateInfo.progress}%` }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {updateStatus === 'downloaded' && (
+              <div className="space-y-1.5">
+                <div className="text-[10px] rounded-md px-2 py-1.5 text-green-600 bg-green-50 border border-green-200 flex items-center gap-1">
+                  <CheckCircle size={10} />
+                  下载完成，重启后安装
+                </div>
+                <button
+                  onClick={handleInstallUpdate}
+                  className="w-full py-1 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[10px] transition-colors"
+                >
+                  重启并安装
+                </button>
+              </div>
+            )}
+
+            {updateStatus === 'error' && (
+              <div className="text-[10px] rounded-md px-2 py-1.5 text-red-600 bg-red-50 border border-red-200 flex items-center gap-1">
+                <AlertCircle size={10} />
+                检查更新失败{updateInfo?.error ? `：${updateInfo.error}` : ''}
+              </div>
+            )}
+          </section>
         </div>
       )}
 
-      {/* 回收站面板 */}
+      {/* 回收站面板 — 固定字号，不受全局 fontScale 影响 */}
       {showTrash && (
-        <div className="mx-4 mb-2 rounded-lg bg-[#F0F0F0] border border-[#D4D4D4] p-3 space-y-3 shadow-md max-h-[40vh] overflow-y-auto">
+        <div
+          ref={trashPanelRef}
+          style={{ zoom: 1 / fontScale }}
+          className="mx-4 mb-2 rounded-lg bg-[#F0F0F0] border border-[#D4D4D4] p-3 space-y-3 shadow-md max-h-[40vh] overflow-y-auto"
+        >
           <div className="flex items-center justify-between px-1">
             <h2 className="text-sm font-semibold text-gray-700 tracking-wide">回收站</h2>
             <div className="flex items-center gap-1">
@@ -1088,25 +1381,29 @@ export default function App() {
       {/* 底部操作栏 */}
       <div className="flex items-center justify-end px-4 py-1.5 border-t border-[#E5E5E5] gap-1">
         <button
+          ref={trashButtonRef}
           onClick={() => { setShowTrash(!showTrash); setShowSettings(false); }}
-          className={`p-1 rounded transition-colors ${
+          className={`flex items-center px-1.5 py-1 rounded transition-colors ${
             showTrash ? 'bg-[#E6F4FF] text-[#0099FF]' : 'text-gray-400 hover:text-gray-600 hover:bg-[#EBEBEB]'
           }`}
           title="回收站"
         >
           <Trash2 size={14} />
+          <span className="text-[12px] font-normal text-[#999] ml-0.5">回收站</span>
         </button>
         <button
           ref={settingsButtonRef}
           onClick={() => { setShowSettings(!showSettings); setShowTrash(false); }}
-          className={`p-1 rounded transition-colors ${
+          className={`flex items-center px-1.5 py-1 rounded transition-colors ${
             showSettings ? 'bg-[#E6F4FF] text-[#0099FF]' : 'text-gray-400 hover:text-gray-600 hover:bg-[#EBEBEB]'
           }`}
           title="设置"
         >
           <Settings size={14} />
+          <span className="text-[12px] font-normal text-[#999] ml-0.5">设置</span>
         </button>
       </div>
+      </div>{/* /字号缩放区域 */}
     </div>
   );
 }
