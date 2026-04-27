@@ -73,6 +73,25 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
     saveStore(store);
   }
 
+  // 异步加载 ai-preset.js 覆盖默认 AI 配置
+  import('./ai-preset.js')
+    .then((m) => {
+      const preset = m.AI_PRESET;
+      if (!preset || !preset.provider) return;
+      const current = store.aiSettings || {};
+      const merged = {
+        ...current,
+        provider: preset.provider || current.provider,
+        apiKey: preset.apiKey || current.apiKey,
+        customBaseUrl: preset.customBaseUrl || current.customBaseUrl,
+        customModel: preset.customModel || current.customModel,
+        shortcutKey: preset.shortcutKey || current.shortcutKey,
+      };
+      store.aiSettings = merged;
+      saveStore(store);
+    })
+    .catch(() => {});
+
   const resolve = (val) => Promise.resolve(val);
 
   window.desktopAPI = {
@@ -98,10 +117,28 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
       return resolve();
     },
 
-    openFolder: () => resolve(),
-    getDesktopFiles: () => resolve([]),
-    moveFiles: () => resolve({ success: false }),
-    captureScreenshot: () => resolve({ sources: [], totalDisplays: 0 }),
+    openFolder: (folderPath) => {
+      // 浏览器预览模式：无法打开本地文件夹，复制路径到剪贴板并提示
+      if (folderPath) {
+        navigator.clipboard?.writeText(folderPath).catch(() => {});
+        console.log('[BrowserMock] openFolder:', folderPath);
+        // 使用 toast 提示代替 alert，避免阻塞
+        const toast = document.createElement('div');
+        toast.textContent = `浏览器预览模式无法打开本地路径，已复制到剪贴板: ${folderPath}`;
+        toast.style.cssText = 'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#333;color:#fff;padding:10px 16px;border-radius:6px;font-size:13px;z-index:9999;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90vw;';
+        document.body.appendChild(toast);
+        setTimeout(() => toast.remove(), 3000);
+      }
+      return resolve();
+    },
+    getFilePath: (file) => {
+      // 浏览器安全限制：File.path 为 undefined，用模拟路径代替
+      if (file?.path) return file.path;
+      if (file?.name) return `/mock/${file.name}`;
+      return '';
+    },
+    getScreenInfo: () => resolve([]),
+    getFrontWindows: () => resolve([]),
     getScreenInfo: () => resolve([]),
     getFrontWindows: () => resolve([]),
     showError: (title, content) => { alert(`${title}\n${content}`); return resolve(); },
@@ -111,6 +148,7 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
     getWindowWidth: () => resolve(350),
     openExternal: (url) => { window.open(url, '_blank'); return resolve(); },
     fetchLinkPreview: () => resolve({ title: null, favicon: null, description: null, source: 'mock' }),
+    fetchRenderedTitle: () => resolve({ title: null, favicon: null, source: 'mock' }),
     registerShortcut: () => resolve({ success: true }),
     unregisterShortcut: () => resolve({ success: true }),
     onShortcutTriggered: () => () => {},
@@ -119,8 +157,11 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
     onPinShortcutTriggered: () => () => {},
     startScreenshotOverlay: () => resolve(null),
     onScreenshotStart: () => () => {},
+    onScreenshotUpdateWindowRect: () => () => {},
     screenshotCrop: () => resolve({ success: false }),
     screenshotCancel: () => resolve({ success: true }),
+    screenshotReady: () => {},
+    onScreenshotReset: () => () => {},
     dockPin: () => resolve({ success: true }),
     dockUnpin: () => resolve({ success: true }),
     dockTogglePin: () => resolve({ pinned: false }),
@@ -131,6 +172,7 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
     onDockStateChanged: () => () => {},
     onDockSnapHint: () => () => {},
     onDockEdgeChanged: () => () => {},
+    onReminderTriggered: () => () => {},
     getAutoLaunch: () => resolve(false),
     setAutoLaunch: () => resolve({ success: true }),
 
