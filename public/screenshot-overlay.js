@@ -17,6 +17,7 @@ let customRect = null;       // 用户拖拽选区（虚拟屏幕坐标）
 let dragStart = null;        // 拖拽起始点（窗口本地坐标）
 let virtualBounds = null;    // 虚拟屏幕边界
 let primaryDisplay = null;   // 主显示器信息
+let currentBlobUrl = null;   // 当前 Blob URL（下次更换前释放）
 
 /**
  * 重置所有状态并清空画面（overlay 隐藏时由主进程触发）
@@ -29,6 +30,10 @@ function resetOverlay() {
 
   const bg = document.getElementById('screenshot-bg');
   bg.src = '';
+  if (currentBlobUrl) {
+    URL.revokeObjectURL(currentBlobUrl);
+    currentBlobUrl = null;
+  }
 
   const canvas = document.getElementById('overlay-canvas');
   const ctx = canvas.getContext('2d');
@@ -48,8 +53,30 @@ api.onScreenshotStart((data) => {
   primaryDisplay = data.primaryDisplay;
 
   const bg = document.getElementById('screenshot-bg');
+  if (!bg) {
+    // DOM 尚未准备好，延迟重试并通知主进程继续，避免阻塞
+    setTimeout(() => {
+      if (api && api.screenshotReady) api.screenshotReady();
+    }, 50);
+    return;
+  }
 
-  // 先清空旧图，再设置新图
+  // 释放上一次的 Blob URL（主进程 ensureOverlayReady 下可能复用同一 overlay）
+  if (currentBlobUrl) {
+    URL.revokeObjectURL(currentBlobUrl);
+    currentBlobUrl = null;
+  }
+
+  // 优先走新的 Buffer + Blob URL 通道；保留 dataUrl 兼容旧路径
+  let src = '';
+  if (data.buffer) {
+    const blob = new Blob([data.buffer], { type: data.mime || 'image/png' });
+    currentBlobUrl = URL.createObjectURL(blob);
+    src = currentBlobUrl;
+  } else if (data.dataUrl) {
+    src = data.dataUrl;
+  }
+
   bg.src = '';
   bg.onload = () => {
     drawOverlay();
@@ -61,7 +88,7 @@ api.onScreenshotStart((data) => {
     drawOverlay();
     api.screenshotReady();
   };
-  bg.src = data.dataUrl;
+  bg.src = src;
 });
 
 // 监听重置信号（overlay 隐藏时清理旧画面）
@@ -134,7 +161,7 @@ function drawOverlay() {
 
   // 尺寸标签
   const label = `${w} x ${h}`;
-  ctx.font = '12px "Microsoft YaHei", system-ui, sans-serif';
+  ctx.font = '12px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", system-ui, sans-serif';
   const tm = ctx.measureText(label);
   const labelW = tm.width + 14;
   const labelH = 22;
@@ -155,7 +182,7 @@ function drawOverlay() {
     const title = windowRect.title.length > 30
       ? windowRect.title.slice(0, 30) + '...'
       : windowRect.title;
-    ctx.font = '11px "Microsoft YaHei", system-ui, sans-serif';
+    ctx.font = '11px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", system-ui, sans-serif';
     const tm2 = ctx.measureText(title);
     const titleW = tm2.width + 14;
     const titleH = 20;

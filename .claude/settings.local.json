@@ -17,7 +17,18 @@
       "Bash(taskkill //F //IM electron.exe)",
       "Read(//tmp/**)",
       "Bash(findstr electron:*)",
-      "Bash(npm -v)"
+      "Bash(npm -v)",
+      "Bash(npx playwright:*)",
+      "Bash(npm root:*)",
+      "Bash(npm list:*)",
+      "Bash(where playwright:*)",
+      "Bash(npx:*)",
+      "Bash(netstat -ano)",
+      "Bash(set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/)",
+      "WebSearch",
+      "Bash(wmic process *)",
+      "Bash(tasklist /fi \"imagename eq electron*\")",
+      "Bash(echo \"VITE_PID=$!\")"
     ]
   }
 }

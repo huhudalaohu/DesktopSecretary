@@ -1,174 +1,232 @@
 /**
- * WorkspaceSwitcher.jsx — 工作区切换模块
+ * WorkspaceSwitcher.jsx — 工作区切换模块（Edge 标签页风格）
  *
- * 顶部横向排列胶囊按钮: [项目A] [项目B] [日常] [+]
- * 选中状态: bg-white/20 + border-b-2 border-blue-400
- * 点击 [+] 弹出输入框添加新工作区
+ * 顶部横向标签栏，模仿 Edge 浏览器标签页设计：
+ * - 梯形圆角标签，上圆下直
+ * - 激活标签白底 + 底部蓝线指示
+ * - 左侧颜色竖线标识项目序号色
+ * - 右侧 × 关闭按钮（hover 显示）
+ * - 双击标签重命名
  */
 
 import React, { useState } from 'react';
 import { Plus } from 'lucide-react';
 
+/**
+ * 深蓝到浅蓝的渐变插值
+ * @param {number} index 当前索引
+ * @param {number} total 总数
+ * @param {string} startHex 起始色（深蓝）
+ * @param {string} endHex 结束色（浅蓝）
+ * @returns {{rgb: string, r: number, g: number, b: number}}
+ */
+function gradientColor(index, total, startHex = '#0259BB', endHex = '#B3D9FF') {
+  if (total <= 1) {
+    const r = parseInt(startHex.slice(1, 3), 16);
+    const g = parseInt(startHex.slice(3, 5), 16);
+    const b = parseInt(startHex.slice(5, 7), 16);
+    return { rgb: startHex, r, g, b };
+  }
+  const t = index / (total - 1);
+  const hexToRgb = (hex) => [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
+  const [r1, g1, b1] = hexToRgb(startHex);
+  const [r2, g2, b2] = hexToRgb(endHex);
+  const r = Math.round(r1 + (r2 - r1) * t);
+  const g = Math.round(g1 + (g2 - g1) * t);
+  const b = Math.round(b1 + (b2 - b1) * t);
+  return { rgb: `rgb(${r}, ${g}, ${b})`, r, g, b };
+}
+
 export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd, onDelete, onReorder, onRename }) {
-  const [adding, setAdding] = useState(false);   // 是否正在输入新工作区名
-  const [newName, setNewName] = useState('');     // 新工作区名称
-  const [contextMenu, setContextMenu] = useState(null); // 右键菜单 {x, y, ws}
-  const [dragIndex, setDragIndex] = useState(null);      // 拖拽中的索引
-  const [dropIndex, setDropIndex] = useState(null);      // 拖拽目标位置
-  const [renamingId, setRenamingId] = useState(null);    // 正在重命名的工作区 id
-  const [renameValue, setRenameValue] = useState('');     // 重命名输入值
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [dragIndex, setDragIndex] = useState(null);
+  const [dropIndex, setDropIndex] = useState(null);
+  const [contextMenu, setContextMenu] = useState(null); // { x, y, wsId }
 
   // 提交新工作区
   const handleSubmit = (e) => {
     e.preventDefault();
     const trimmed = newName.trim();
-    if (trimmed) {
-      onAdd(trimmed);
-    }
+    if (trimmed) onAdd(trimmed);
     setNewName('');
     setAdding(false);
-  };
-
-  // 删除工作区
-  const handleDelete = (ws) => {
-    onDelete(ws.id);
-    setContextMenu(null);
-  };
-
-  // 开始重命名
-  const handleStartRename = (ws) => {
-    setRenamingId(ws.id);
-    setRenameValue(ws.name);
-    setContextMenu(null);
   };
 
   // 确认重命名
   const handleConfirmRename = () => {
     const trimmed = renameValue.trim();
-    if (trimmed && renamingId && onRename) {
-      onRename(renamingId, trimmed);
-    }
+    if (trimmed && renamingId && onRename) onRename(renamingId, trimmed);
     setRenamingId(null);
     setRenameValue('');
   };
 
   return (
-    <div
-      className="flex items-center gap-2 overflow-x-auto pb-1"
-      onClick={() => setContextMenu(null)}
-      onContextMenu={(e) => e.preventDefault()}
-    >
-      {/* 工作区按钮列表 */}
-      {workspaces.map((ws, index) => (
-        renamingId === ws.id ? (
-          <input
-            key={ws.id}
-            autoFocus
-            value={renameValue}
-            onChange={(e) => setRenameValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleConfirmRename();
-              if (e.key === 'Escape') { setRenamingId(null); setRenameValue(''); }
-            }}
-            onBlur={handleConfirmRename}
-            onClick={(e) => e.stopPropagation()}
-            className="w-20 px-2 py-1 rounded-full text-xs bg-white/10 text-white placeholder-white/30 border border-blue-400/50 outline-none"
-          />
-        ) : (
-          <button
-            key={ws.id}
-            draggable
-            onClick={() => onSwitch(ws.id)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setContextMenu({ x: e.clientX, y: e.clientY, ws });
-            }}
-            onDragStart={(e) => {
-              setDragIndex(index);
-              e.dataTransfer.effectAllowed = 'move';
-              e.dataTransfer.setData('text/plain', index.toString());
-            }}
-            onDragOver={(e) => {
-              e.preventDefault();
-              e.dataTransfer.dropEffect = 'move';
-              setDropIndex(index);
-            }}
-            onDragLeave={() => {
-              if (dropIndex === index) setDropIndex(null);
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
-              if (from !== index) {
-                onReorder(from, index);
-              }
-              setDragIndex(null);
-              setDropIndex(null);
-            }}
-            onDragEnd={() => {
-              setDragIndex(null);
-              setDropIndex(null);
-            }}
-            className={`px-3 py-1.5 rounded-full text-xs whitespace-nowrap transition-all ${
-              dragIndex === index ? 'opacity-30' : ''
-            } ${
-              dropIndex === index && dragIndex !== index ? 'border-l-2 border-blue-400' : ''
-            } ${
-              active === ws.id
-                ? 'bg-white/20 border-b-2 border-blue-400 text-white'
-                : 'text-white/50 hover:text-white hover:bg-white/10'
-            }`}
-            title={ws.name}
-          >
-            {ws.name.length > 5 ? ws.name.slice(0, 5) + '...' : ws.name}
-          </button>
-        )
-      ))}
-
-      {/* 添加按钮 / 输入框 */}
-      {adding ? (
-        <form onSubmit={handleSubmit}>
-          <input
-            autoFocus
-            value={newName}
-            onChange={(e) => setNewName(e.target.value)}
-            onBlur={() => { setAdding(false); setNewName(''); }}
-            placeholder="名称..."
-            className="w-20 px-2 py-1 rounded-full text-xs bg-white/10 text-white placeholder-white/30 border border-white/20 outline-none"
-          />
-        </form>
-      ) : (
-        <button
-          onClick={() => setAdding(true)}
-          className="p-1.5 rounded-full text-white/40 hover:text-white hover:bg-white/10 transition-colors"
-        >
-          <Plus size={14} />
-        </button>
-      )}
-
-      {/* 右键菜单 */}
-      {contextMenu && (
+    <>
+      <style>{`
+        .edge-tabs-scroll::-webkit-scrollbar { height: 4px !important; }
+        .edge-tabs-scroll::-webkit-scrollbar-track { background: transparent !important; border-radius: 999px !important; }
+        .edge-tabs-scroll::-webkit-scrollbar-thumb { border-radius: 999px !important; background: transparent !important; }
+        .edge-tabs-scroll::-webkit-scrollbar-thumb:hover { background: #D4D4D4 !important; }
+        .edge-tabs-scroll::-webkit-scrollbar-button { display: none !important; }
+      `}</style>
+      <div>
         <div
-          className="fixed z-50 bg-slate-800/95 backdrop-blur border border-white/10 rounded-lg py-1 shadow-xl min-w-[100px]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          onClick={(e) => e.stopPropagation()}
+          className="edge-tabs-scroll flex items-end gap-0.5 overflow-x-auto pl-1 pr-2 pt-1.5"
+          onContextMenu={(e) => e.preventDefault()}
+          onWheel={(e) => {
+            if (e.deltaY !== 0) {
+              e.currentTarget.scrollLeft += e.deltaY;
+              e.preventDefault();
+            }
+          }}
         >
-          <button
-            onClick={() => handleStartRename(contextMenu.ws)}
-            className="w-full text-left text-xs px-3 py-1.5 text-white/60 hover:bg-white/10"
-          >
-            重命名
-          </button>
-          <div className="border-t border-white/10 my-1" />
-          <button
-            onClick={() => handleDelete(contextMenu.ws)}
-            className="w-full text-left text-xs px-3 py-1.5 text-red-400/80 hover:bg-white/10"
-          >
-            删除 "{contextMenu.ws.name}"
-          </button>
+          {workspaces.map((ws, index) => {
+            const color = gradientColor(index, workspaces.length);
+            const isActive = active === ws.id;
+
+            return renamingId === ws.id ? (
+              <input
+                key={ws.id}
+                autoFocus
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleConfirmRename();
+                  if (e.key === 'Escape') { setRenamingId(null); setRenameValue(''); }
+                }}
+                onBlur={handleConfirmRename}
+                onClick={(e) => e.stopPropagation()}
+                className="px-2 py-1 rounded-t-md text-[13px] bg-white text-gray-800 border border-[#0078D4] outline-none w-24"
+              />
+            ) : (
+              <div
+                key={ws.id}
+                draggable
+                role="button"
+                tabIndex={0}
+                onClick={() => onSwitch(ws.id)}
+                onDoubleClick={() => {
+                  setRenamingId(ws.id);
+                  setRenameValue(ws.name);
+                }}
+                onDragStart={(e) => {
+                  setDragIndex(index);
+                  e.dataTransfer.effectAllowed = 'copyMove';
+                  e.dataTransfer.setData('text/plain', index.toString());
+                  e.dataTransfer.setData('text/workspace', `${ws.id}|${ws.name}`);
+                  e.dataTransfer.setData('application/json', JSON.stringify({ workspaceId: ws.id, workspaceName: ws.name }));
+                  window.__draggingWorkspace = { workspaceId: ws.id, workspaceName: ws.name };
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                  setDropIndex(index);
+                }}
+                onDragLeave={() => {
+                  if (dropIndex === index) setDropIndex(null);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
+                  if (!Number.isNaN(from) && from !== index) onReorder(from, index);
+                  setDragIndex(null);
+                  setDropIndex(null);
+                }}
+                onDragEnd={() => {
+                  setDragIndex(null);
+                  setDropIndex(null);
+                  delete window.__draggingWorkspace;
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setContextMenu({ x: e.clientX, y: e.clientY, wsId: ws.id });
+                }}
+                className={`
+                  group relative flex items-center h-7 rounded-t-md text-[13px] select-none cursor-pointer transition-colors overflow-hidden flex-shrink-0
+                  ${dragIndex === index ? 'opacity-40' : ''}
+                  ${dropIndex === index && dragIndex !== index ? 'border-l-2 border-[#0078D4]' : ''}
+                  ${isActive
+                    ? 'bg-white text-[#202124]'
+                    : 'bg-[#E8E8E8] text-[#5F6368] hover:bg-[#DCDCDC]'
+                  }
+                `}
+                style={{ fontFamily: "'D-DIN', sans-serif" }}
+                title={ws.name}
+              >
+                {/* 左侧序号区 */}
+                <div
+                  className="h-full w-[18px] flex items-center justify-center flex-shrink-0 transition-colors"
+                  style={{
+                    backgroundColor: isActive ? '#FFFFFF' : color.rgb,
+                  }}
+                >
+                  <span
+                    className="text-[11px] font-bold tabular-nums leading-none transition-colors"
+                    style={{ color: isActive ? color.rgb : '#FFFFFF' }}
+                  >
+                    {index + 1}
+                  </span>
+                </div>
+                {/* 项目名称 */}
+                <span className="truncate max-w-[80px] ml-1.5 mr-2">{ws.name}</span>
+              </div>
+            );
+          })}
+
+          {/* 添加按钮 */}
+          {adding ? (
+            <form onSubmit={handleSubmit} className="mb-0.5">
+              <input
+                autoFocus
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onBlur={() => { setAdding(false); setNewName(''); }}
+                placeholder="名称..."
+                className="px-2 py-1 rounded-t-lg text-[13px] bg-white text-gray-800 border border-[#E0E0E0] outline-none focus:border-[#0078D4] w-20"
+              />
+            </form>
+          ) : (
+            <button
+              onClick={() => setAdding(true)}
+              className="w-7 h-7 mb-0.5 rounded-full flex items-center justify-center text-[#5F6368] hover:bg-[#E0E0E0] transition-colors flex-shrink-0"
+            >
+              <Plus size={14} />
+            </button>
+          )}
         </div>
-      )}
-    </div>
+
+        {/* 右键删除菜单 */}
+        {contextMenu && (
+          <>
+            <div
+              className="fixed inset-0 z-[9998]"
+              onClick={() => setContextMenu(null)}
+            />
+            <div
+              className="fixed z-[9999] bg-white border border-[#E5E5E5] rounded-lg py-1 shadow-lg min-w-[80px]"
+              style={{ left: contextMenu.x, top: contextMenu.y }}
+            >
+              <button
+                onClick={() => {
+                  onDelete(contextMenu.wsId);
+                  setContextMenu(null);
+                }}
+                className="w-full text-left text-[11px] px-3 py-1.5 text-red-500 hover:bg-red-50"
+              >
+                删除
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </>
   );
 }

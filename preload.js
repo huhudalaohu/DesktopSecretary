@@ -6,7 +6,7 @@
  * 渲染进程只能调用这里列出的方法，无法直接访问 Node.js 或 Electron API。
  */
 
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('desktopAPI', {
   // ========== electron-store 操作 ==========
@@ -19,8 +19,11 @@ contextBridge.exposeInMainWorld('desktopAPI', {
 
   // ========== 文件操作 ==========
 
-  /** 用系统默认方式打开文件夹，并自动记录到 recentFolders */
-  openFolder: (folderPath, storeKey) => ipcRenderer.invoke('open-folder', folderPath, storeKey),
+  /** 用系统默认方式打开文件夹 */
+  openFolder: (folderPath) => ipcRenderer.invoke('open-folder', folderPath),
+
+  /** 获取拖拽文件的本地绝对路径（Electron 22+ webUtils） */
+  getFilePath: (file) => webUtils.getPathForFile(file),
 
   /** 扫描桌面目录，返回最近修改的文件列表 */
   getDesktopFiles: () => ipcRenderer.invoke('get-desktop-files'),
@@ -43,7 +46,7 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   getScreenInfo: () => ipcRenderer.invoke('get-screen-info'),
 
   /**
-   * 获取前台窗口信息（Windows 专用）
+   * 获取前台窗口信息（跨平台，主进程通过平台抽象层分发）
    * @returns {Promise<Array<{title, processName, rect, isChatApp}>>}
    */
   getFrontWindows: () => ipcRenderer.invoke('get-front-windows'),
@@ -52,6 +55,9 @@ contextBridge.exposeInMainWorld('desktopAPI', {
 
   /** 弹出系统错误提示框 */
   showError: (title, content) => ipcRenderer.invoke('show-error', title, content),
+
+  /** 弹出待办提醒对话框 */
+  showReminder: (title, detail) => ipcRenderer.invoke('show-reminder', title, detail),
 
   /** 关闭应用 */
   closeApp: () => ipcRenderer.invoke('close-app'),
@@ -173,10 +179,48 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   /** 获取 Dock 状态 */
   dockGetState: () => ipcRenderer.invoke('dock:get-state'),
 
+  /** 获取当前吸附边缘与浮空 bounds */
+  getDockEdge: () => ipcRenderer.invoke('dock:get-edge'),
+
+  /** 获取开机自启状态 */
+  getAutoLaunch: () => ipcRenderer.invoke('get-auto-launch'),
+
+  /** 设置开机自启状态 */
+  setAutoLaunch: (enabled) => ipcRenderer.invoke('set-auto-launch', enabled),
+
+  /** 导出数据（Excel + JSON 备份） */
+  exportData: () => ipcRenderer.invoke('data:export'),
+
+  /** 导入备份恢复数据 */
+  importData: () => ipcRenderer.invoke('data:import'),
+
+  /** 获取存储统计 */
+  getDataStats: () => ipcRenderer.invoke('data:stats'),
+
   /** 监听 Dock 状态变化 */
   onDockStateChanged: (callback) => {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on('dock:state-changed', handler);
     return () => ipcRenderer.removeListener('dock:state-changed', handler);
+  },
+
+  /**
+   * 监听拖动过程中的边缘吸附提示
+   * @param {Function} callback — 接收 {edge: 'left'|'right'|'top'|null}
+   */
+  onDockSnapHint: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('dock:snap-hint', handler);
+    return () => ipcRenderer.removeListener('dock:snap-hint', handler);
+  },
+
+  /**
+   * 监听吸附边缘或浮空状态切换
+   * @param {Function} callback — 接收 {dockedEdge, dockBounds}
+   */
+  onDockEdgeChanged: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('dock:edge-changed', handler);
+    return () => ipcRenderer.removeListener('dock:edge-changed', handler);
   },
 });

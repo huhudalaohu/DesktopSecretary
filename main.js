@@ -16,7 +16,7 @@
  *   - move-files           — 将文件从源路径移动到目标文件夹（含确认对话框）
  *   - show-error           — 弹出系统错误提示框
  *   - get-screen-info      — 返回所有屏幕的尺寸和位置信息
- *   - get-front-windows    — 获取前台窗口信息（Windows）
+ *   - get-front-windows    — 获取前台窗口信息（跨平台，平台抽象层分发）
  *   - register-shortcut    — 注册全局快捷键
  *   - unregister-shortcut  — 注销全局快捷键
  */
@@ -24,9 +24,9 @@
 const { app, BrowserWindow, screen, ipcMain, shell, desktopCapturer, dialog, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { execSync } = require('child_process');
 const https = require('https');
 const http = require('http');
+const platform = require('./main/platform');
 
 const DEV_SERVER_URL = process.env.ELECTRON_RENDERER_URL || 'http://localhost:5173';
 const DEV_SERVER_WAIT_MS = 15000;
@@ -38,26 +38,45 @@ let store;
 // 主窗口引用
 let mainWindow = null;
 
-// 截图 overlay 窗口
-let overlayWindow = null;
+// 截图 overlay 窗口池（每块显示器一个，解决多屏 + 跨 DPI 的渲染问题）
+// key: String(display.id)，value: BrowserWindow
+const overlayWindows = new Map();
 let screenshotResolve = null;  // Promise resolve 函数，等待用户操作后回调
-let capturedScreenshot = null; // desktopCapturer 返回的 NativeImage 源，用于裁剪
+let screenshotTimeout = null;  // 截图流程超时定时器
+let capturedScreenshot = null; // 平台抽象层返回的 CaptureSource[]，用于裁剪
+let overlayActive = false;     // 当前是否处于截图选区阶段
 
 // ========== QQ 式 Dock 自动隐藏 ==========
-const DOCK_EDGE_WIDTH = 6;       // 贴边时露出的细边宽度(px)
-const DOCK_EXPANDED_WIDTH = 350; // 展开时的默认宽度(px)
-const DOCK_HEIGHT_RATIO = 0.85;  // 高度占屏幕比例
-const DOCK_HOT_ZONE_WIDTH = 20;  // 触发热区宽度(px)，鼠标进入此区域触发展开
-const DOCK_HIDE_DELAY = 1500;    // 缩回延迟(ms)
-const DOCK_GRACE_PERIOD = 500;   // 展开后的宽限期(ms)，期间不检测离开
+const DOCK_EDGE_WIDTH = 6;        // 贴边时露出的细边宽度(px)
+const DOCK_EXPANDED_WIDTH = 350;  // 展开时的默认宽度(px)
+const DOCK_HEIGHT_RATIO = 0.85;   // 高度占屏幕比例
+const DOCK_HOT_ZONE_WIDTH = 20;   // 触发热区宽度(px)
+const DOCK_EXPAND_DELAY = 800;    // 鼠标贴边到展开的延迟(ms) — 防误触
+const DOCK_GRACE_PERIOD = 500;    // 展开后的宽限期(ms)，期间不检测离开
+const DOCK_SNAP_THRESHOLD = 20;   // 拖动释放时离边缘 ≤ 此距离则吸附(px)
+const DOCK_MOVE_THROTTLE = 30;    // 拖动 move 事件节流(ms)
+const DOCK_MIN_WIDTH = 280;
+const DOCK_MAX_WIDTH = 520;
+const DOCK_MIN_HEIGHT = 400;
+const DOCK_RATIO_MIN = 1.2;       // 浮空态 height/width 最小比
+const DOCK_RATIO_MAX = 4.0;       // 浮空态 height/width 最大比
 
-let dockExpanded = false;        // 当前是否展开
-let dockPinned = false;          // 是否锁定展开
-let dockHideTimer = null;        // 缩回定时器
-let dockGraceTimer = null;       // 宽限期定时器
-let dockMouseTimer = null;       // 鼠标检测定时器
-let dockInteracting = false;     // 用户是否正在窗口内交互（滚动/输入/点击）
-let dockExpandedWidth = DOCK_EXPANDED_WIDTH; // 当前展开宽度（px），用户调整后更新
+let dockExpanded = false;
+let dockPinned = false;
+let dockHideTimer = null;         // 预留（当前不使用延迟收起）
+let dockGraceTimer = null;
+let dockMouseTimer = null;
+let dockExpandTimer = null;       // 贴边展开延迟定时器（800ms）
+let dockInteracting = false;      // 保留以兼容 IPC，不再参与收起判定
+let dockExpandedWidth = DOCK_EXPANDED_WIDTH;
+let dockedEdge = 'right';         // 'left' | 'right' | 'top' | null(浮空)
+let dockBounds = null;            // 浮空时的 {x,y,width,height}
+let dockEdgeOffset = null;        // 吸附后沿边位置: left/right 为 {y,height}；top 为 {x,width}
+let dockMoveThrottleTimer = null; // move 事件节流句柄
+let dockResizeThrottleTimer = null;
+let lastSnapHintEdge = undefined; // 防止重复推送 snap-hint
+let suppressMoveHint = false;     // 编程性 setBounds 期间屏蔽蓝光推送
+let suppressMoveHintTimer = null;
 
 // 当前注册的快捷键
 let registeredShortcut = null;
@@ -159,77 +178,141 @@ async function initStore() {
         apiKey: '',
         customBaseUrl: '',
         customModel: 'mimo-chat',
-        shortcutKey: 'Ctrl+Shift+A',
+        shortcutKey: 'CmdOrCtrl+Shift+A',
       },
     },
   });
 }
 
 /**
- * 将窗口定位到主屏幕右侧，高度占满工作区
- */
-/**
- * 将窗口定位到 Dock 位置（贴边或展开）
+ * 将窗口定位到 Dock 位置
+ *   - dockedEdge 为 'left'|'right'|'top'：按边缘计算（expanded 决定露出宽/高）；
+ *     沿边坐标从 dockEdgeOffset 读，首次为空时退回居中。
+ *   - dockedEdge 为 null：浮空模式，直接用 dockBounds
  */
 function positionDockWindow(expanded) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  // 屏蔽 200ms 内的 snap-hint 推送（setBounds 会触发 move 事件）
+  suppressMoveHint = true;
+  if (suppressMoveHintTimer) clearTimeout(suppressMoveHintTimer);
+  suppressMoveHintTimer = setTimeout(() => { suppressMoveHint = false; }, 200);
+
+  if (dockedEdge === null) {
+    if (dockBounds) {
+      mainWindow.setBounds(dockBounds, false);
+    }
+    return;
+  }
+
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width: sw, height: sh } = primaryDisplay.size;
   const { x: bx, y: by } = primaryDisplay.bounds;
+  const defaultH = Math.round(sh * DOCK_HEIGHT_RATIO);
 
-  const w = expanded ? dockExpandedWidth : DOCK_EDGE_WIDTH;
-  const h = Math.round(sh * DOCK_HEIGHT_RATIO);
+  let x, y, w, h;
 
-  mainWindow.setBounds({
-    x: bx + sw - w,
-    y: by + Math.round((sh - h) / 2),
-    width: w,
-    height: h,
-  }, true); // animate = true for smooth transition on some platforms
+  if (dockedEdge === 'right' || dockedEdge === 'left') {
+    w = expanded ? dockExpandedWidth : DOCK_EDGE_WIDTH;
+    h = dockEdgeOffset?.height ?? defaultH;
+    h = Math.max(DOCK_MIN_HEIGHT, Math.min(sh, h));
+    const defaultY = by + Math.round((sh - h) / 2);
+    y = dockEdgeOffset?.y ?? defaultY;
+    y = Math.max(by, Math.min(by + sh - h, y));
+    x = dockedEdge === 'right' ? (bx + sw - w) : bx;
+  } else if (dockedEdge === 'top') {
+    const storedW = dockEdgeOffset?.width ?? dockExpandedWidth;
+    w = Math.max(DOCK_MIN_WIDTH, Math.min(sw, storedW));
+    h = expanded ? defaultH : DOCK_EDGE_WIDTH;
+    const defaultX = bx + Math.round((sw - w) / 2);
+    x = dockEdgeOffset?.x ?? defaultX;
+    x = Math.max(bx, Math.min(bx + sw - w, x));
+    y = by;
+  }
+
+  mainWindow.setBounds({ x, y, width: w, height: h }, true);
+}
+
+/**
+ * 长宽比与最小/最大尺寸 clamp（浮空态 resize 用）
+ */
+function clampFloatingBounds(b) {
+  let { x, y, width, height } = b;
+  const screenH = screen.getPrimaryDisplay().workAreaSize.height;
+  width = Math.max(DOCK_MIN_WIDTH, Math.min(DOCK_MAX_WIDTH, width));
+  height = Math.max(DOCK_MIN_HEIGHT, Math.min(screenH, height));
+  const ratio = height / width;
+  if (ratio < DOCK_RATIO_MIN) height = Math.round(width * DOCK_RATIO_MIN);
+  if (ratio > DOCK_RATIO_MAX) height = Math.round(width * DOCK_RATIO_MAX);
+  return { x, y, width, height };
+}
+
+/**
+ * 计算窗口与当前所在显示器三条边（上/左/右）的距离
+ */
+function getEdgeDistances(bounds) {
+  const display = screen.getDisplayMatching(bounds);
+  const sb = display.bounds;
+  return {
+    display: sb,
+    dLeft: bounds.x - sb.x,
+    dRight: (sb.x + sb.width) - (bounds.x + bounds.width),
+    dTop: bounds.y - sb.y,
+  };
+}
+
+function pickSnapEdge(distances) {
+  const { dLeft, dRight, dTop } = distances;
+  const minD = Math.min(dLeft, dRight, dTop);
+  if (minD > DOCK_SNAP_THRESHOLD) return null;
+  if (minD === dLeft) return 'left';
+  if (minD === dRight) return 'right';
+  return 'top';
 }
 
 /**
  * 展开 Dock
  */
 function expandDock(reason) {
+  if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
   if (dockExpanded) return;
   console.log(`[Dock] 展开 (${reason})`);
   dockExpanded = true;
-  clearTimeout(dockHideTimer);
+  clearTimeout(dockHideTimer); dockHideTimer = null;
   clearTimeout(dockGraceTimer);
 
-  // 启用窗口交互
   mainWindow.setIgnoreMouseEvents(false);
   positionDockWindow(true);
   mainWindow.show();
+  console.log('[Window] shown, bounds=', mainWindow.getBounds(), 'dockedEdge=', dockedEdge, 'dockExpanded=', dockExpanded);
   mainWindow.focus();
 
-  // 宽限期：展开后一段时间内不检测离开
-  dockGraceTimer = setTimeout(() => {
-    dockGraceTimer = null;
-  }, DOCK_GRACE_PERIOD);
+  dockGraceTimer = setTimeout(() => { dockGraceTimer = null; }, DOCK_GRACE_PERIOD);
 
-  // 通知渲染进程切换样式
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('dock:state-changed', { expanded: true });
+    mainWindow.webContents.send('dock:state-changed', { expanded: true, pinned: dockPinned });
   }
 }
 
 /**
- * 收起 Dock
+ * 收起 Dock（同步）
+ *   - 钉起状态不收起
+ *   - 浮空模式不收起（常驻展开）
  */
 function collapseDock(reason) {
-  if (!dockExpanded || dockPinned || dockInteracting) return;
+  if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
+  if (!dockExpanded) return;
+  if (dockPinned) return;
+  if (dockedEdge === null) return;
   console.log(`[Dock] 收起 (${reason})`);
   dockExpanded = false;
-  clearTimeout(dockHideTimer);
+  clearTimeout(dockHideTimer); dockHideTimer = null;
 
-  // 通知渲染进程
   if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('dock:state-changed', { expanded: false });
+    mainWindow.webContents.send('dock:state-changed', { expanded: false, pinned: dockPinned });
   }
 
-  // 延迟缩小窗口（等动画结束后再 resize）
+  // 延迟缩小窗口，让渲染侧先切样式，避免视觉抖
   setTimeout(() => {
     if (!dockExpanded && mainWindow && !mainWindow.isDestroyed()) {
       positionDockWindow(false);
@@ -238,74 +321,69 @@ function collapseDock(reason) {
 }
 
 /**
- * 安排延迟收起（幂等：如果已经在计时，不重复启动）
+ * 延迟展开（鼠标贴边 0.8s 后展开，防误触）
  */
-function scheduleCollapse(reason) {
-  if (dockPinned || dockInteracting) return;
-  if (dockHideTimer) return; // 已经在倒计时中，不重置
-  dockHideTimer = setTimeout(() => {
-    dockHideTimer = null;
-    if (!dockPinned && !dockInteracting) {
-      collapseDock(reason);
-    }
-  }, DOCK_HIDE_DELAY);
+function scheduleExpand(reason) {
+  if (dockExpandTimer) return;
+  if (dockExpanded) return;
+  if (dockedEdge === null || dockPinned) return;
+  dockExpandTimer = setTimeout(() => {
+    dockExpandTimer = null;
+    expandDock(reason);
+  }, DOCK_EXPAND_DELAY);
 }
 
 /**
  * 鼠标位置检测循环（主进程轮询）
+ *   - 浮空或钉起：清定时器，不判定
+ *   - 贴边吸附：鼠标进入热区延迟展开；鼠标离开窗口立即收起
  */
 function startDockMouseTracking() {
-  let lastInZone = false;
   dockMouseTimer = setInterval(() => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
+
+    // 浮空或钉起：清定时器，跳过判定
+    if (dockedEdge === null || dockPinned) {
+      if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
+      if (dockHideTimer) { clearTimeout(dockHideTimer); dockHideTimer = null; }
+      return;
+    }
 
     const cursor = screen.getCursorScreenPoint();
     const bounds = mainWindow.getBounds();
 
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { width: sw, height: sh } = primaryDisplay.size;
-    const { x: bx, y: by } = primaryDisplay.bounds;
-    const sf = primaryDisplay.scaleFactor;
-    const screenRightEdge = bx + sw;
-
-    // 鼠标在屏幕右边缘热区（细边态：触发展开）
+    // 未展开：外扩 HOT_ZONE 缓冲，判定是否贴近
     const inHotZone = !dockExpanded && (
-      cursor.x >= screenRightEdge - DOCK_HOT_ZONE_WIDTH &&
-      cursor.x <= screenRightEdge &&
-      cursor.y >= bounds.y &&
-      cursor.y <= bounds.y + bounds.height
+      cursor.x >= bounds.x - DOCK_HOT_ZONE_WIDTH &&
+      cursor.x <= bounds.x + bounds.width + DOCK_HOT_ZONE_WIDTH &&
+      cursor.y >= bounds.y - DOCK_HOT_ZONE_WIDTH &&
+      cursor.y <= bounds.y + bounds.height + DOCK_HOT_ZONE_WIDTH
     );
 
-    // 展开态：检测鼠标是否在窗口范围内（外扩 20px 缓冲）
+    // 已展开：严格在窗口内（不外扩，离开即收起）
     const inExpandedWindow = dockExpanded && (
-      cursor.x >= bounds.x - 20 &&
-      cursor.x <= bounds.x + bounds.width + 20 &&
-      cursor.y >= bounds.y - 20 &&
-      cursor.y <= bounds.y + bounds.height + 20
+      cursor.x >= bounds.x &&
+      cursor.x <= bounds.x + bounds.width &&
+      cursor.y >= bounds.y &&
+      cursor.y <= bounds.y + bounds.height
     );
 
     const inZone = inHotZone || inExpandedWindow;
 
     if (inZone) {
-      if (!dockExpanded) {
-        expandDock('鼠标进入热区');
+      if (dockExpanded) {
+        // 已展开：清 expand timer（虽然通常此时不会有）
+        if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
+      } else {
+        // 鼠标贴边：启动 0.8s 延迟展开
+        scheduleExpand('贴边 0.8s');
       }
-      clearTimeout(dockHideTimer);
-      dockHideTimer = null;
-    } else if (dockExpanded && !dockPinned) {
-      if (!dockGraceTimer) {
-        scheduleCollapse('鼠标离开窗口');
+    } else {
+      // 离开区域
+      if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
+      if (dockExpanded && !dockGraceTimer) {
+        collapseDock('鼠标离开');
       }
-    }
-
-    // 每 2 秒输出一次调试信息（不管状态有没有变）
-    if (Date.now() % 2000 < 100) {
-      console.log(`[Dock Debug] cursor=(${cursor.x},${cursor.y}) rightEdge=${screenRightEdge} sw=${sw} bounds=(${bounds.x},${bounds.y},${bounds.width}x${bounds.height}) inHotZone=${inHotZone} inExpandedWindow=${inExpandedWindow} inZone=${inZone} expanded=${dockExpanded} pinned=${dockPinned} grace=${!!dockGraceTimer} hideTimer=${!!dockHideTimer}`);
-    }
-
-    if (inZone !== lastInZone) {
-      console.log(`[Dock] ${inZone ? '进入' : '离开'}热区, cursor=(${cursor.x},${cursor.y}), rightEdge=${screenRightEdge}, bounds=(${bounds.x},${bounds.y},${bounds.width}x${bounds.height})`);
-      lastInZone = inZone;
     }
   }, 80);
 }
@@ -314,38 +392,83 @@ function startDockMouseTracking() {
  * 创建主窗口（Dock 模式）
  */
 async function createWindow() {
-  // 从持久化存储读取用户上次设置的宽度百分比
   const savedPct = store.get('windowWidthPercent', 20);
   const screenW = screen.getPrimaryDisplay().size.width;
-  dockExpandedWidth = Math.max(280, Math.min(600, Math.round(screenW * savedPct / 100)));
+  dockExpandedWidth = Math.max(DOCK_MIN_WIDTH, Math.min(DOCK_MAX_WIDTH, Math.round(screenW * savedPct / 100)));
+
+  // 读 dockedEdge + dockBounds；兼容旧 dockPosition
+  const savedEdge = store.get('dockedEdge', undefined);
+  if (savedEdge === undefined) {
+    const legacy = store.get('dockPosition', null);
+    if (legacy === 'right' || legacy === 'top-right') dockedEdge = 'right';
+    else if (legacy === 'left' || legacy === 'top-left') dockedEdge = 'left';
+    else dockedEdge = 'right';
+    store.set('dockedEdge', dockedEdge);
+    try { store.delete('dockPosition'); } catch {}
+  } else {
+    const valid = ['left', 'right', 'top'];
+    if (savedEdge === null) dockedEdge = null;
+    else dockedEdge = valid.includes(savedEdge) ? savedEdge : 'right';
+  }
+
+  dockBounds = store.get('dockBounds', null);
+  dockEdgeOffset = store.get('dockEdgeOffset', null);
 
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width: sw, height: sh } = primaryDisplay.size;
   const { x: bx, y: by } = primaryDisplay.bounds;
-  const h = Math.round(sh * DOCK_HEIGHT_RATIO);
+  const defaultH = Math.round(sh * DOCK_HEIGHT_RATIO);
 
-  mainWindow = new BrowserWindow({
-    x: bx + sw - DOCK_EDGE_WIDTH,
-    y: by + Math.round((sh - h) / 2),
-    width: DOCK_EDGE_WIDTH,
-    height: h,
-    frame: false,
-    transparent: true,
-    resizable: false,
-    movable: false,
-    skipTaskbar: true,
-    alwaysOnTop: true,
-    hasShadow: false,
-    backgroundColor: '#00000000',
+  // 启动默认为展开状态（app.whenReady 里会 pin + expandDock）
+  let initialX, initialY, initialW, initialH;
+  if (dockedEdge === null && dockBounds) {
+    ({ x: initialX, y: initialY, width: initialW, height: initialH } = dockBounds);
+  } else if (dockedEdge === 'left' || dockedEdge === 'right') {
+    initialW = dockExpandedWidth;
+    initialH = dockEdgeOffset?.height ?? defaultH;
+    initialH = Math.max(DOCK_MIN_HEIGHT, Math.min(sh, initialH));
+    const centerY = by + Math.round((sh - initialH) / 2);
+    initialY = dockEdgeOffset?.y ?? centerY;
+    initialY = Math.max(by, Math.min(by + sh - initialH, initialY));
+    initialX = dockedEdge === 'left' ? bx : (bx + sw - initialW);
+  } else if (dockedEdge === 'top') {
+    const storedW = dockEdgeOffset?.width ?? dockExpandedWidth;
+    initialW = Math.max(DOCK_MIN_WIDTH, Math.min(sw, storedW));
+    initialH = defaultH;
+    const centerX = bx + Math.round((sw - initialW) / 2);
+    initialX = dockEdgeOffset?.x ?? centerX;
+    initialX = Math.max(bx, Math.min(bx + sw - initialW, initialX));
+    initialY = by;
+  } else {
+    // 浮空但无 bounds：默认右侧
+    dockedEdge = 'right';
+    initialW = dockExpandedWidth;
+    initialH = defaultH;
+    initialX = bx + sw - initialW;
+    initialY = by + Math.round((sh - initialH) / 2);
+  }
+
+  mainWindow = new BrowserWindow(platform.windowOptions.mainWindowOptions({
+    x: initialX,
+    y: initialY,
+    width: initialW,
+    height: initialH,
+    minWidth: DOCK_MIN_WIDTH,
+    minHeight: DOCK_MIN_HEIGHT,
+    resizable: dockedEdge === null,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
-  });
+  }));
+  platform.windowOptions.applyMainWindowPlatformSetup(mainWindow);
+  console.log('[Window] created, initialBounds=', { x: initialX, y: initialY, width: initialW, height: initialH }, 'dockedEdge=', dockedEdge);
 
-  loadRendererWindow(mainWindow, '/', path.join(__dirname, 'dist', 'index.html')).catch((err) => {
-    console.error('Failed to load index.html:', err);
+  // 开发模式加载 Vite dev server（支持热更新），生产模式加载 build 产物
+  const indexFile = path.join(__dirname, 'dist', 'index.html');
+  loadRendererWindow(mainWindow, '/', indexFile).catch((err) => {
+    console.error('Failed to load window content:', err);
   });
 
   mainWindow.webContents.on('did-finish-load', () => {
@@ -354,20 +477,131 @@ async function createWindow() {
   mainWindow.webContents.on('did-fail-load', (_event, code, desc) => {
     console.error('Window failed to load:', code, desc);
   });
+
+  // 拖动过程：节流 move，推送 snap-hint
+  mainWindow.on('move', () => {
+    if (dockMoveThrottleTimer) return;
+    dockMoveThrottleTimer = setTimeout(() => {
+      dockMoveThrottleTimer = null;
+      handleWindowMove();
+    }, DOCK_MOVE_THROTTLE);
+  });
+
+  // 拖动结束：边缘吸附判定
+  mainWindow.on('moved', () => {
+    handleWindowMoved();
+  });
+
+  // Resize：仅浮空态允许，clamp 长宽比与最大最小
+  mainWindow.on('will-resize', (event, newBounds) => {
+    if (dockedEdge !== null) {
+      event.preventDefault();
+      return;
+    }
+    const clamped = clampFloatingBounds(newBounds);
+    if (clamped.width !== newBounds.width || clamped.height !== newBounds.height) {
+      event.preventDefault();
+      mainWindow.setBounds(clamped);
+    }
+  });
+
+  mainWindow.on('resize', () => {
+    if (dockedEdge !== null) return;
+    if (dockResizeThrottleTimer) return;
+    dockResizeThrottleTimer = setTimeout(() => {
+      dockResizeThrottleTimer = null;
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      const b = mainWindow.getBounds();
+      dockBounds = b;
+      store.set('dockBounds', b);
+    }, 200);
+  });
+
   mainWindow.on('closed', () => {
     clearInterval(dockMouseTimer);
     clearTimeout(dockHideTimer);
     clearTimeout(dockGraceTimer);
+    clearTimeout(dockExpandTimer);
+    clearTimeout(dockMoveThrottleTimer);
+    clearTimeout(dockResizeThrottleTimer);
     console.log('Window closed');
     mainWindow = null;
   });
 
-  // 启动鼠标位置检测
   startDockMouseTracking();
 }
 
 /**
- * 计算所有显示器合并后的虚拟屏幕边界
+ * 拖动中：节流计算 snap-hint，推送给渲染侧显示发光边
+ *   - 编程性 setBounds 期间（suppressMoveHint）或吸附状态下不推 hint，
+ *     以免吸附动作完成后蓝光闪回。
+ */
+function handleWindowMove() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isMinimized()) return;
+
+  if (suppressMoveHint || dockedEdge !== null) {
+    if (lastSnapHintEdge !== undefined && lastSnapHintEdge !== null) {
+      lastSnapHintEdge = null;
+      mainWindow.webContents.send('dock:snap-hint', { edge: null });
+    }
+    return;
+  }
+
+  const b = mainWindow.getBounds();
+  const d = getEdgeDistances(b);
+  const hintEdge = pickSnapEdge(d);
+
+  if (hintEdge !== lastSnapHintEdge) {
+    lastSnapHintEdge = hintEdge;
+    mainWindow.webContents.send('dock:snap-hint', { edge: hintEdge });
+  }
+}
+
+/**
+ * 拖动结束：若近边缘则吸附；否则进入浮空模式
+ */
+function handleWindowMoved() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const b = mainWindow.getBounds();
+  const d = getEdgeDistances(b);
+  const targetEdge = pickSnapEdge(d);
+
+  // 清 snap-hint
+  lastSnapHintEdge = undefined;
+  mainWindow.webContents.send('dock:snap-hint', { edge: null });
+
+  if (targetEdge !== null) {
+    // 吸附到边缘，保留拖动终点沿边位置
+    dockedEdge = targetEdge;
+    if (targetEdge === 'right' || targetEdge === 'left') {
+      dockEdgeOffset = { y: b.y, height: b.height };
+    } else {
+      dockEdgeOffset = { x: b.x, width: b.width };
+    }
+    store.set('dockedEdge', targetEdge);
+    store.set('dockEdgeOffset', dockEdgeOffset);
+    mainWindow.setResizable(false);
+    dockExpanded = true;
+    positionDockWindow(true);
+    mainWindow.webContents.send('dock:edge-changed', { dockedEdge, dockBounds: null });
+    mainWindow.webContents.send('dock:state-changed', { expanded: true, pinned: dockPinned });
+  } else {
+    // 浮空模式
+    dockedEdge = null;
+    dockBounds = b;
+    store.set('dockedEdge', null);
+    store.set('dockBounds', b);
+    mainWindow.setResizable(true);
+    dockExpanded = true; // 浮空常驻展开
+    if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
+    if (dockHideTimer) { clearTimeout(dockHideTimer); dockHideTimer = null; }
+    mainWindow.webContents.send('dock:edge-changed', { dockedEdge: null, dockBounds: b });
+    mainWindow.webContents.send('dock:state-changed', { expanded: true, pinned: dockPinned });
+  }
+}
+
+/**
+ * 计算所有显示器合并后的虚拟屏幕边界（保留：当前用于调试日志）
  */
 function calculateVirtualBounds(displays) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -381,86 +615,131 @@ function calculateVirtualBounds(displays) {
 }
 
 /**
- * 隐藏截图 overlay 窗口并恢复主窗口（不销毁，复用）
- * 隐藏后立即发送 reset 信号清理旧截图数据，避免下次打开时闪烁旧画面
+ * 创建一个 overlay 窗口，覆盖指定 display 的 bounds
+ */
+async function createOverlayForDisplay(display) {
+  const win = new BrowserWindow(platform.windowOptions.overlayWindowOptions({
+    x: display.bounds.x,
+    y: display.bounds.y,
+    width: display.bounds.width,
+    height: display.bounds.height,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      additionalArguments: [`--display-id=${display.id}`],
+    },
+  }));
+  platform.windowOptions.applyOverlayPlatformSetup(win);
+
+  const overlayFile = path.join(__dirname, 'dist', 'screenshot-overlay.html');
+  try {
+    await win.loadFile(overlayFile);
+  } catch (err) {
+    console.error(`[Screenshot] overlay[${display.id}] loadFile 失败:`, err);
+    throw err;
+  }
+
+  await new Promise((resolve) => {
+    if (win.isDestroyed()) { resolve(); return; }
+    const timer = setTimeout(resolve, 800);
+    win.webContents.once('did-finish-load', () => { clearTimeout(timer); resolve(); });
+    win.webContents.once('dom-ready', () => { clearTimeout(timer); resolve(); });
+    win.webContents.once('did-fail-load', () => { clearTimeout(timer); resolve(); });
+  });
+
+  const displayId = String(display.id);
+  win.on('closed', () => {
+    overlayWindows.delete(displayId);
+  });
+
+  overlayWindows.set(displayId, win);
+  console.log(`[Screenshot] overlay[${displayId}] 预创建完成 bounds=${display.bounds.x},${display.bounds.y} ${display.bounds.width}x${display.bounds.height}`);
+  return win;
+}
+
+/**
+ * 确保每块显示器都有 overlay；新插入的显示器会补建，移除的则销毁
+ */
+async function ensureOverlayReady() {
+  const displays = screen.getAllDisplays();
+  const wanted = new Set(displays.map((d) => String(d.id)));
+
+  // 销毁已拔掉的显示器对应的 overlay
+  for (const [id, win] of overlayWindows) {
+    if (!wanted.has(id)) {
+      try { if (!win.isDestroyed()) win.destroy(); } catch {}
+      overlayWindows.delete(id);
+      console.log(`[Screenshot] overlay[${id}] 已移除（显示器拔出）`);
+    }
+  }
+
+  // 为每个显示器补建 overlay
+  const creations = [];
+  for (const d of displays) {
+    const id = String(d.id);
+    const existing = overlayWindows.get(id);
+    if (existing && !existing.isDestroyed()) {
+      // 同步一下 bounds（metrics 变了之后）
+      try {
+        existing.setBounds({
+          x: d.bounds.x, y: d.bounds.y, width: d.bounds.width, height: d.bounds.height,
+        });
+      } catch {}
+      continue;
+    }
+    if (existing) overlayWindows.delete(id);
+    creations.push(createOverlayForDisplay(d));
+  }
+  if (creations.length > 0) {
+    await Promise.all(creations);
+  }
+}
+
+/**
+ * 显示器热插拔事件，重建 overlay 池
+ */
+function attachDisplayChangeListeners() {
+  const rebuild = () => {
+    ensureOverlayReady().catch((err) => {
+      console.error('[Screenshot] overlay 池重建失败:', err);
+    });
+  };
+  screen.on('display-added', rebuild);
+  screen.on('display-removed', rebuild);
+  screen.on('display-metrics-changed', rebuild);
+}
+
+/**
+ * 隐藏所有 overlay 并恢复主窗口
  */
 function hideOverlay() {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.hide();
-    overlayWindow.webContents.send('screenshot:reset');
+  overlayActive = false;
+  for (const win of overlayWindows.values()) {
+    if (win.isDestroyed()) continue;
+    try { win.webContents.send('screenshot:reset'); } catch {}
+    try { win.hide(); } catch {}
   }
   if (mainWindow && !mainWindow.isDestroyed()) {
+    console.log('[Window] show() from hideOverlay');
     mainWindow.show();
     mainWindow.focus();
   }
 }
 
 /**
- * 销毁截图 overlay 窗口（仅应用退出时调用）
+ * 销毁全部 overlay（仅应用退出时调用）
  */
 function destroyOverlay() {
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.removeAllListeners('closed');
-    overlayWindow.destroy();
-    overlayWindow = null;
+  for (const win of overlayWindows.values()) {
+    try {
+      if (!win.isDestroyed()) {
+        win.removeAllListeners('closed');
+        win.destroy();
+      }
+    } catch {}
   }
-}
-
-/**
- * 预创建截图 overlay 窗口（隐藏状态），点击时直接 show()
- */
-async function precreateOverlayWindow() {
-  if (overlayWindow && !overlayWindow.isDestroyed()) return;
-
-  const displays = screen.getAllDisplays();
-  const virtualBounds = calculateVirtualBounds(displays);
-
-  overlayWindow = new BrowserWindow({
-    x: virtualBounds.x,
-    y: virtualBounds.y,
-    width: virtualBounds.width,
-    height: virtualBounds.height,
-    frame: false,
-    transparent: true,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    resizable: false,
-    movable: false,
-    fullscreenable: false,
-    hasShadow: false,
-    show: false,
-    backgroundColor: '#00000000',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  loadRendererWindow(
-    overlayWindow,
-    '/screenshot-overlay.html',
-    path.join(__dirname, 'dist', 'screenshot-overlay.html')
-  ).catch((err) => {
-    console.error('Failed to load screenshot overlay:', err);
-  });
-
-  overlayWindow.on('closed', () => {
-    overlayWindow = null;
-    if (screenshotResolve) {
-      screenshotResolve(null);
-      screenshotResolve = null;
-    }
-    capturedScreenshot = null;
-    // 窗口关闭后延迟重建，确保下次可用
-    setTimeout(() => {
-      precreateOverlayWindow().catch((err) => {
-        console.error('Failed to recreate screenshot overlay:', err);
-      });
-    }, 500);
-  });
-
-  console.log('[Screenshot] Overlay 窗口预创建完成');
+  overlayWindows.clear();
 }
 
 /**
@@ -480,161 +759,193 @@ function startScreenshotOverlay() {
 
     // 清理上一次残留数据
     capturedScreenshot = null;
+    if (screenshotTimeout) {
+      clearTimeout(screenshotTimeout);
+      screenshotTimeout = null;
+    }
 
     // 10 秒超时保护
-    const timeout = setTimeout(() => {
+    screenshotTimeout = setTimeout(() => {
       console.log('[Screenshot] overlay 超时，自动取消');
       hideOverlay();
       capturedScreenshot = null;
+      screenshotTimeout = null;
       if (screenshotResolve) {
         screenshotResolve(null);
         screenshotResolve = null;
       }
     }, 10000);
 
-    // 1. 隐藏主窗口
+    // 1. 隐藏主窗口 + 保证每块屏的 overlay 都就绪（复用预创建 + 热插拔补建）
     if (mainWindow && !mainWindow.isDestroyed()) {
+      console.log('[Window] hide triggered at:', new Error().stack);
       mainWindow.hide();
     }
 
-    // 2. 截取全屏（无延迟，主窗口隐藏后立即截取）
-    const displays = screen.getAllDisplays();
-    let maxWidth = 0, maxHeight = 0;
-    for (const d of displays) {
-      const w = d.size.width * d.scaleFactor;
-      const h = d.size.height * d.scaleFactor;
-      if (w > maxWidth) maxWidth = w;
-      if (h > maxHeight) maxHeight = h;
+    try {
+      await ensureOverlayReady();
+    } catch (err) {
+      console.error('[Screenshot] overlay 就绪失败:', err);
+      if (screenshotTimeout) { clearTimeout(screenshotTimeout); screenshotTimeout = null; }
+      if (screenshotResolve) { screenshotResolve(null); screenshotResolve = null; }
+      return;
     }
-    maxWidth = Math.max(maxWidth, 1920);
-    maxHeight = Math.max(maxHeight, 1080);
 
+    const displays = screen.getAllDisplays();
+
+    // 2. 截屏（走平台抽象层，返回所有屏的 CaptureSource[]）
     let sources;
     try {
-      sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: { width: maxWidth, height: maxHeight },
-      });
+      sources = await platform.screenCapture.captureAllScreens();
+      capturedScreenshot = sources;
+      console.log(`[Screenshot] 截屏成功, 源数量=${sources.length}`);
     } catch (err) {
       console.error('[Screenshot] 截屏失败:', err);
-      clearTimeout(timeout);
+      if (screenshotTimeout) { clearTimeout(screenshotTimeout); screenshotTimeout = null; }
       hideOverlay();
       if (screenshotResolve) { screenshotResolve(null); screenshotResolve = null; }
       return;
     }
-    capturedScreenshot = sources;
 
     const t1 = Date.now();
-    console.log(`[Screenshot] 截屏完成: ${t1 - t0}ms`);
+    console.log(`[Screenshot] 截屏+窗口准备完成: ${t1 - t0}ms`);
 
-    // 3. 确保 overlay 窗口存在
-    if (!overlayWindow || overlayWindow.isDestroyed()) {
-      precreateOverlayWindow();
-      await new Promise((r) => {
-        if (overlayWindow.webContents.isLoading()) {
-          overlayWindow.webContents.once('did-finish-load', r);
-        } else {
-          r();
-        }
-      });
-    }
+    // 3. 清空 ready 监听，准备收集每块屏的 ready 信号
+    ipcMain.removeAllListeners('screenshot:ready');
 
-    // 4. 找到主屏幕对应的 source
-    const primaryDisplay = screen.getPrimaryDisplay();
-    let primarySource = sources[0];
-    for (const s of sources) {
-      if (String(s.display_id) === String(primaryDisplay.id)) {
-        primarySource = s;
-        break;
+    // 4. 每块屏推一张 PNG Buffer 到对应 overlay
+    const pendingOverlays = [];
+    for (const display of displays) {
+      const displayId = String(display.id);
+      const win = overlayWindows.get(displayId);
+      if (!win || win.isDestroyed()) {
+        console.warn(`[Screenshot] display ${displayId} 缺少 overlay，跳过`);
+        continue;
       }
+
+      // 找到对应 display 的 capture source
+      let source = sources.find((s) => s.displayId === displayId);
+      if (!source) {
+        // 回退：按 bounds 左上角匹配
+        source = sources.find((s) =>
+          Math.abs(s.bounds.x - display.bounds.x) <= 2 &&
+          Math.abs(s.bounds.y - display.bounds.y) <= 2
+        );
+      }
+      if (!source) {
+        console.warn(`[Screenshot] display ${displayId} 没有匹配到截图源，跳过`);
+        continue;
+      }
+
+      const tBuf0 = Date.now();
+      const buffer = source.toBuffer('png');
+      const tBuf1 = Date.now();
+      console.log(`[Screenshot] display[${displayId}] PNG ${tBuf1 - tBuf0}ms, ${Math.round(buffer.length / 1024)}KB, engine=${source.engine}`);
+
+      win.webContents.send('screenshot:start', {
+        buffer,
+        mime: 'image/png',
+        windowRect: null,
+        // 对于 per-monitor overlay，虚拟边界就是自己这块屏的 bounds
+        virtualBounds: {
+          x: display.bounds.x,
+          y: display.bounds.y,
+          width: display.bounds.width,
+          height: display.bounds.height,
+        },
+        primaryDisplay: {
+          bounds: display.bounds,
+          scaleFactor: display.scaleFactor,
+        },
+      });
+
+      pendingOverlays.push(win);
     }
 
-    // 5. 先发送截图数据，再等 overlay 确认图片加载完毕
-    //    这样 overlay.show() 时展示的就是当前截图，不会闪旧图
-    overlayWindow.webContents.send('screenshot:start', {
-      dataUrl: primarySource.thumbnail.toDataURL(),
-      windowRect: null,
-      virtualBounds: calculateVirtualBounds(displays),
-      primaryDisplay: {
-        bounds: primaryDisplay.bounds,
-        scaleFactor: primaryDisplay.scaleFactor,
-      },
-    });
+    if (pendingOverlays.length === 0) {
+      console.error('[Screenshot] 没有任何 overlay 可用');
+      if (screenshotTimeout) { clearTimeout(screenshotTimeout); screenshotTimeout = null; }
+      hideOverlay();
+      if (screenshotResolve) { screenshotResolve(null); screenshotResolve = null; }
+      return;
+    }
 
-    // 等待 overlay 发回 screenshot:ready（图片 onload 后触发），2s 超时兜底
+    // 5. 等待所有 overlay ready（图片加载完毕），500ms 兜底
     await new Promise((readyResolve) => {
+      let remaining = pendingOverlays.length;
       const readyTimeout = setTimeout(() => {
-        console.log('[Screenshot] overlay ready 超时，强制显示');
+        console.log(`[Screenshot] overlay ready 超时(剩 ${remaining})，强制显示`);
+        ipcMain.removeListener('screenshot:ready', onReady);
         readyResolve();
-      }, 2000);
-      ipcMain.once('screenshot:ready', () => {
-        clearTimeout(readyTimeout);
-        readyResolve();
-      });
+      }, 500);
+      const onReady = () => {
+        remaining--;
+        if (remaining <= 0) {
+          clearTimeout(readyTimeout);
+          ipcMain.removeListener('screenshot:ready', onReady);
+          readyResolve();
+        }
+      };
+      ipcMain.on('screenshot:ready', onReady);
     });
 
-    // 6. 图片就绪，显示 overlay
-    overlayWindow.show();
-    overlayWindow.focus();
+    // 6. 图片就绪，显示所有 overlay；焦点给光标所在那块屏
+    overlayActive = true;
+    const cursor = screen.getCursorScreenPoint();
+    const cursorDisplay = screen.getDisplayNearestPoint(cursor);
+    for (const win of pendingOverlays) {
+      try { win.show(); } catch {}
+    }
+    const focusId = String(cursorDisplay.id);
+    const focusWin = overlayWindows.get(focusId) || pendingOverlays[0];
+    if (focusWin && !focusWin.isDestroyed()) {
+      try { focusWin.focus(); } catch {}
+    }
 
     const t2 = Date.now();
-    console.log(`[Screenshot] Overlay 显示完成: ${t2 - t0}ms (截屏${t1 - t0}ms + 加载${t2 - t1}ms)`);
+    console.log(`[Screenshot] Overlay 显示完成: ${t2 - t0}ms (截屏${t1 - t0}ms + 加载${t2 - t1}ms), overlays=${pendingOverlays.length}`);
 
-    // 7. 异步获取前台窗口（使用 exec 而非 execSync，不阻塞主进程）
-    if (process.platform === 'win32') {
-      const { exec } = require('child_process');
-      const psScript = `
-        Add-Type @"
-          using System;
-          using System.Runtime.InteropServices;
-          using System.Text;
-          public class Win32 {
-            [DllImport("user32.dll")]
-            public static extern IntPtr GetForegroundWindow();
-            [DllImport("user32.dll", CharSet = CharSet.Auto)]
-            public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-            [DllImport("user32.dll")]
-            public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-            [DllImport("user32.dll")]
-            public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-            [StructLayout(LayoutKind.Sequential)]
-            public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-          }
-"@;
-        $hwnd = [Win32]::GetForegroundWindow();
-        $title = New-Object System.Text.StringBuilder 256;
-        [Win32]::GetWindowText($hwnd, $title, 256) | Out-Null;
-        $rect = New-Object Win32+RECT;
-        [Win32]::GetWindowRect($hwnd, [ref]$rect) | Out-Null;
-        $pidVal = [uint32]0;
-        [Win32]::GetWindowThreadProcessId($hwnd, [ref]$pidVal) | Out-Null;
-        $proc = Get-Process -Id $pidVal -ErrorAction SilentlyContinue;
-        @{ title = $title.ToString(); processName = if ($proc) { $proc.ProcessName } else { "" }; rect = @{ left = $rect.Left; top = $rect.Top; right = $rect.Right; bottom = $rect.Bottom } } | ConvertTo-Json -Compress
-      `;
-      exec(`powershell -NoProfile -Command "${psScript.replace(/"/g, '\\"')}"`, {
-        timeout: 3000, encoding: 'utf8', windowsHide: true,
-      }, (err, stdout) => {
-        if (err) {
-          console.log('[Screenshot] 前台窗口检测失败（非关键）:', err.message);
-          return;
-        }
-        try {
-          const winInfo = JSON.parse(stdout.trim());
-          if (winInfo.processName && !winInfo.processName.toLowerCase().includes('electron')) {
-            if (overlayWindow && !overlayWindow.isDestroyed()) {
-              overlayWindow.webContents.send('screenshot:update-window-rect', winInfo.rect);
-            }
-            console.log(`[Screenshot] 前台窗口检测: ${Date.now() - t0}ms`);
-          }
-        } catch (parseErr) {
-          console.log('[Screenshot] 前台窗口 JSON 解析失败:', parseErr.message);
-        }
-      });
-    }
+    // 7. 异步获取前台窗口（仅推给该窗口所在 display 的 overlay）
+    platform.windowInfo.getForegroundWindow().then((winInfo) => {
+      if (!winInfo) return;
+      if (!winInfo.processName || winInfo.processName.toLowerCase().includes('electron')) return;
+      // 按窗口中心点定位所在显示器
+      const cx = (winInfo.rect.left + winInfo.rect.right) / 2;
+      const cy = (winInfo.rect.top + winInfo.rect.bottom) / 2;
+      const targetDisplay = screen.getDisplayNearestPoint({ x: Math.round(cx), y: Math.round(cy) });
+      const targetWin = overlayWindows.get(String(targetDisplay.id));
+      if (targetWin && !targetWin.isDestroyed()) {
+        targetWin.webContents.send('screenshot:update-window-rect', winInfo.rect);
+        console.log(`[Screenshot] 前台窗口检测 → display ${targetDisplay.id}: ${Date.now() - t0}ms`);
+      }
+    }).catch((err) => {
+      console.log('[Screenshot] 前台窗口检测失败（非关键）:', err.message);
+    });
   });
 }
 
 // ========== IPC 处理器 ==========
+
+/** 清理过期的 linkCache（网页元数据缓存，24h 过期） */
+function cleanupLinkCache() {
+  try {
+    const now = Date.now();
+    const allCache = store.get('linkCache', {});
+    let removed = 0;
+    for (const [key, entry] of Object.entries(allCache)) {
+      if (now - entry.timestamp > 24 * 60 * 60 * 1000) {
+        delete allCache[key];
+        removed++;
+      }
+    }
+    if (removed > 0) {
+      store.set('linkCache', allCache);
+      console.log(`[Cleanup] linkCache 清理完成，移除 ${removed} 条过期缓存`);
+    }
+  } catch (err) {
+    console.error('[Cleanup] linkCache 清理失败:', err);
+  }
+}
 
 function registerIpcHandlers() {
   /** store:get — 读取 electron-store 数据 */
@@ -645,6 +956,19 @@ function registerIpcHandlers() {
   /** store:set — 写入 electron-store 数据 */
   ipcMain.handle('store:set', (_event, key, value) => {
     store.set(key, value);
+  });
+
+  /** show-reminder — 弹出待办提醒对话框 */
+  ipcMain.handle('show-reminder', async (_event, title, detail) => {
+    if (!mainWindow) return;
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: 'info',
+      title: '待办提醒',
+      message: title || '待办事项到期',
+      detail: detail || '',
+      buttons: ['知道了'],
+    });
+    return result;
   });
 
   /** open-folder — 打开系统文件夹并记录到最近访问 */
@@ -733,57 +1057,14 @@ function registerIpcHandlers() {
   });
 
   /**
-   * get-front-windows — 获取前台窗口信息（Windows 专用）
-   * 使用 PowerShell 调用 Win32 API 获取当前前台窗口的进程名和位置
-   * 用于检测微信/QQ/飞书等聊天窗口
+   * get-front-windows — 获取前台窗口信息
+   * 走平台抽象层：Windows 使用 PowerShell；macOS 暂返回空（阶段 2 接入 get-windows）
    */
-  ipcMain.handle('get-front-windows', () => {
-    if (process.platform !== 'win32') return [];
-
+  ipcMain.handle('get-front-windows', async () => {
     try {
-      // PowerShell 脚本：获取前台窗口信息
-      const psScript = `
-        Add-Type @"
-          using System;
-          using System.Runtime.InteropServices;
-          using System.Text;
-          public class Win32 {
-            [DllImport("user32.dll")]
-            public static extern IntPtr GetForegroundWindow();
-            [DllImport("user32.dll", CharSet = CharSet.Auto)]
-            public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-            [DllImport("user32.dll")]
-            public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-            [DllImport("user32.dll")]
-            public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
-            [StructLayout(LayoutKind.Sequential)]
-            public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-          }
-"@
-        $hwnd = [Win32]::GetForegroundWindow()
-        $title = New-Object System.Text.StringBuilder 256
-        [Win32]::GetWindowText($hwnd, $title, 256) | Out-Null
-        $rect = New-Object Win32+RECT
-        [Win32]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
-        $pidVal = [uint32]0
-        [Win32]::GetWindowThreadProcessId($hwnd, [ref]$pidVal) | Out-Null
-        $proc = Get-Process -Id $pidVal -ErrorAction SilentlyContinue
-        $result = @{
-          title = $title.ToString()
-          processName = if ($proc) { $proc.ProcessName } else { "" }
-          rect = @{ left = $rect.Left; top = $rect.Top; right = $rect.Right; bottom = $rect.Bottom }
-        }
-        $result | ConvertTo-Json -Compress
-      `;
+      const winInfo = await platform.windowInfo.getForegroundWindow();
+      if (!winInfo) return [];
 
-      const output = execSync(`powershell -Command "${psScript.replace(/"/g, '\\"')}"`, {
-        timeout: 5000,
-        encoding: 'utf8',
-      });
-
-      const winInfo = JSON.parse(output.trim());
-
-      // 已知聊天应用列表
       const chatApps = ['WeChat', 'QQ', 'Feishu', 'Lark', 'DingTalk', 'WeCom', 'TIM', 'Telegram'];
       const isChatApp = chatApps.some((app) =>
         winInfo.processName?.toLowerCase().includes(app.toLowerCase())
@@ -867,7 +1148,7 @@ function registerIpcHandlers() {
     app.quit();
   });
 
-  /** resize-window — 调整窗口宽度（右边缘固定，左边缘扩展） */
+  /** resize-window — 调整窗口宽度 */
   ipcMain.handle('resize-window', (_event, newWidth) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     const minW = 280;
@@ -875,18 +1156,9 @@ function registerIpcHandlers() {
     const w = Math.max(minW, Math.min(maxW, newWidth));
     // 记住用户设置的展开宽度
     dockExpandedWidth = w;
-    // Dock 模式下：展开窗口并调整宽度
+    // Dock 模式下：若已展开则直接 reposition；若收起则先展开再定位
     if (!dockExpanded) expandDock('resize-window');
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const { width: sw, height: sh } = primaryDisplay.size;
-    const { x: bx, y: by } = primaryDisplay.bounds;
-    const h = Math.round(sh * DOCK_HEIGHT_RATIO);
-    mainWindow.setBounds({
-      x: bx + sw - w,
-      y: by + Math.round((sh - h) / 2),
-      width: w,
-      height: h,
-    });
+    else positionDockWindow(true);
     return w;
   });
 
@@ -927,6 +1199,9 @@ function registerIpcHandlers() {
         const cacheEntry = { ...result, timestamp: Date.now() };
         store.set(`linkCache.${cacheKey}`, cacheEntry);
       }
+
+      // 顺便清理过期缓存（概率触发，避免每次请求都全量扫描）
+      if (Math.random() < 0.1) cleanupLinkCache();
 
       return result;
     } catch {
@@ -1103,17 +1378,18 @@ function registerIpcHandlers() {
     }
 
     if (!accelerator) return { success: true };
+    const normalized = platform.shortcuts.normalizeShortcut(accelerator);
 
     try {
-      const registered = globalShortcut.register(accelerator, () => {
+      const registered = globalShortcut.register(normalized, () => {
         // 快捷键触发时通知渲染进程
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('shortcut-triggered');
         }
       });
       if (registered) {
-        registeredShortcut = accelerator;
-        console.log(`[Shortcut] 已注册: ${accelerator}`);
+        registeredShortcut = normalized;
+        console.log(`[Shortcut] 已注册: ${normalized}`);
         return { success: true };
       } else {
         return { success: false, error: '快捷键注册失败，可能已被其他程序占用' };
@@ -1153,29 +1429,40 @@ function registerIpcHandlers() {
    */
   ipcMain.handle('screenshot:crop', async (_event, { x, y, width, height }) => {
     try {
-      const source = capturedScreenshot?.[0];
-      if (!source) throw new Error('No captured screenshot');
+      if (!capturedScreenshot || capturedScreenshot.length === 0) {
+        throw new Error('No captured screenshot');
+      }
 
-      // 获取对应显示器的 scaleFactor，将逻辑坐标转为像素坐标
-      const displays = screen.getAllDisplays();
+      // 找到裁剪矩形落在的显示器 —— 支持多屏
       const primaryDisplay = screen.getPrimaryDisplay();
-      const sf = primaryDisplay.scaleFactor;
+      const centerX = x + width / 2;
+      const centerY = y + height / 2;
+      let source = capturedScreenshot.find((s) => {
+        const b = s.bounds;
+        return centerX >= b.x && centerX < b.x + b.width && centerY >= b.y && centerY < b.y + b.height;
+      });
+      if (!source) {
+        source = capturedScreenshot.find((s) => s.displayId === String(primaryDisplay.id))
+              || capturedScreenshot[0];
+      }
 
-      // 裁剪坐标需减去显示器在虚拟屏幕中的偏移
-      const cropX = Math.round((x - primaryDisplay.bounds.x) * sf);
-      const cropY = Math.round((y - primaryDisplay.bounds.y) * sf);
+      const sf = source.scaleFactor;
+      const cropX = Math.round((x - source.bounds.x) * sf);
+      const cropY = Math.round((y - source.bounds.y) * sf);
       const cropW = Math.round(width * sf);
       const cropH = Math.round(height * sf);
 
-      console.log(`[Screenshot] 裁剪: screen(${x},${y},${width},${height}) -> pixel(${cropX},${cropY},${cropW},${cropH}), sf=${sf}`);
+      console.log(`[Screenshot] 裁剪[${source.engine}]: screen(${x},${y},${width},${height}) -> pixel(${cropX},${cropY},${cropW},${cropH}), sf=${sf}, display=${source.displayId}`);
 
-      const cropped = source.thumbnail.crop({
-        x: cropX, y: cropY, width: cropW, height: cropH,
-      });
-      const dataUrl = cropped.toDataURL();
+      const cropped = source.crop({ x: cropX, y: cropY, width: cropW, height: cropH });
+      const dataUrl = cropped.toDataUrl();
 
       hideOverlay();
       capturedScreenshot = null;
+      if (screenshotTimeout) {
+        clearTimeout(screenshotTimeout);
+        screenshotTimeout = null;
+      }
       if (screenshotResolve) {
         screenshotResolve(dataUrl);
         screenshotResolve = null;
@@ -1195,6 +1482,10 @@ function registerIpcHandlers() {
   ipcMain.handle('screenshot:cancel', () => {
     hideOverlay();
     capturedScreenshot = null;
+    if (screenshotTimeout) {
+      clearTimeout(screenshotTimeout);
+      screenshotTimeout = null;
+    }
     if (screenshotResolve) {
       screenshotResolve(null);
       screenshotResolve = null;
@@ -1207,23 +1498,34 @@ function registerIpcHandlers() {
   /** dock:pin — 锁定展开状态 */
   ipcMain.handle('dock:pin', () => {
     dockPinned = true;
+    if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
+    if (dockHideTimer) { clearTimeout(dockHideTimer); dockHideTimer = null; }
+    if (!dockExpanded) expandDock('pin');
     console.log('[Dock] 已锁定');
     return { success: true };
   });
 
-  /** dock:unpin — 解锁，允许自动收起 */
+  /** dock:unpin — 解锁，允许自动收起（鼠标离开后自然收起） */
   ipcMain.handle('dock:unpin', () => {
     dockPinned = false;
+    if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
+    if (dockHideTimer) { clearTimeout(dockHideTimer); dockHideTimer = null; }
+    dockInteracting = false;
     console.log('[Dock] 已解锁');
-    scheduleCollapse('用户解锁');
     return { success: true };
   });
 
   /** dock:toggle-pin — 切换锁定 */
   ipcMain.handle('dock:toggle-pin', () => {
     dockPinned = !dockPinned;
+    if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
+    if (dockHideTimer) { clearTimeout(dockHideTimer); dockHideTimer = null; }
+    if (dockPinned) {
+      if (!dockExpanded) expandDock('pin');
+    } else {
+      dockInteracting = false;
+    }
     console.log(`[Dock] 锁定状态: ${dockPinned}`);
-    if (!dockPinned) scheduleCollapse('用户解锁');
     return { pinned: dockPinned };
   });
 
@@ -1231,54 +1533,298 @@ function registerIpcHandlers() {
   ipcMain.handle('dock:expand', (_event, delay) => {
     expandDock('外部请求');
     if (delay && delay > 0) {
-      scheduleCollapse(`延时${delay}ms后收起`);
+      setTimeout(() => {
+        if (!dockPinned && dockedEdge !== null) {
+          collapseDock(`延时${delay}ms 后收起`);
+        }
+      }, delay);
     }
     return { success: true };
   });
 
-  /** dock:set-interacting — 渲染进程通知正在交互 */
+  /** dock:set-interacting — 兼容旧 API；收起判定已不依赖此状态 */
   ipcMain.handle('dock:set-interacting', (_event, interacting) => {
-    dockInteracting = interacting;
-    if (interacting) {
-      clearTimeout(dockHideTimer);
-    } else {
-      scheduleCollapse('交互结束');
-    }
+    dockInteracting = !!interacting;
     return { success: true };
   });
 
   /** dock:get-state — 获取当前 Dock 状态 */
   ipcMain.handle('dock:get-state', () => {
-    return { expanded: dockExpanded, pinned: dockPinned };
+    return { expanded: dockExpanded, pinned: dockPinned, dockedEdge, dockBounds };
+  });
+
+  /** dock:get-edge — 获取吸附边缘与浮空 bounds */
+  ipcMain.handle('dock:get-edge', () => {
+    return { dockedEdge, dockBounds };
+  });
+
+  /** get-auto-launch — 获取开机自启状态 */
+  ipcMain.handle('get-auto-launch', () => {
+    return store.get('autoLaunch', false);
+  });
+
+  /** set-auto-launch — 设置开机自启状态 */
+  ipcMain.handle('set-auto-launch', (_event, enabled) => {
+    store.set('autoLaunch', !!enabled);
+    app.setLoginItemSettings({ openAtLogin: !!enabled });
+    console.log(`[AutoLaunch] 开机自启设置为: ${!!enabled}`);
+    return { success: true };
+  });
+
+  // ========== 数据导出/导入/统计 IPC ==========
+
+  /** data:export — 导出 Excel 可读数据 + JSON 完整备份 */
+  ipcMain.handle('data:export', async () => {
+    try {
+      const XLSX = require('xlsx');
+      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const timeStr = new Date().toTimeString().slice(0, 5).replace(/:/g, '');
+      const defaultName = `DesktopSecretary_导出_${dateStr}_${timeStr}`;
+
+      const { filePath } = await dialog.showSaveDialog(mainWindow, {
+        title: '导出数据',
+        defaultPath: `${defaultName}.xlsx`,
+        filters: [
+          { name: 'Excel 文件', extensions: ['xlsx'] },
+          { name: '所有文件', extensions: ['*'] },
+        ],
+      });
+      if (!filePath) return { success: false, cancelled: true };
+
+      const dir = path.dirname(filePath);
+      const baseName = path.basename(filePath, path.extname(filePath));
+      const excelPath = path.join(dir, `${baseName}.xlsx`);
+      const backupPath = path.join(dir, `${baseName}_备份.json`);
+
+      // 读取所有数据
+      const workspaces = store.get('workspaces', []);
+      const todosGlobal = store.get('todosGlobal', []);
+      const globalQuickIcons = store.get('globalQuickIcons', []);
+      const aiSettings = store.get('aiSettings', {});
+      const tokenStats = store.get('tokenStats', {});
+
+      // 按工作区读取隔离数据
+      const allQuickLinks = [];
+      const allFileShortcuts = [];
+      for (const ws of workspaces) {
+        const ql = store.get(`quickLinks:${ws.id}`, {});
+        for (const [groupId, group] of Object.entries(ql)) {
+          for (const link of group.links || []) {
+            allQuickLinks.push({
+              工作区: ws.name,
+              分组: group.name || groupId,
+              标题: link.title,
+              URL: link.url,
+              添加日期: link.addedAt,
+            });
+          }
+        }
+        const fsData = store.get(`fileShortcuts:${ws.id}`, []);
+        for (const s of fsData) {
+          allFileShortcuts.push({
+            工作区: ws.name,
+            名称: s.name,
+            路径: s.path,
+            添加日期: s.addedAt,
+          });
+        }
+      }
+
+      // 生成 Excel
+      const wb = XLSX.utils.book_new();
+
+      const wsWorkspaces = XLSX.utils.json_to_sheet(workspaces.map((w) => ({ ID: w.id, 名称: w.name })));
+      XLSX.utils.book_append_sheet(wb, wsWorkspaces, '工作区');
+
+      const wsTodos = XLSX.utils.json_to_sheet(
+        todosGlobal.map((t) => ({
+          内容: t.text,
+          完成: t.done ? '是' : '否',
+          优先级: t.priority,
+          工作区ID: t.workspaceId || '',
+          创建时间: t.createdAt ? new Date(t.createdAt).toLocaleString('zh-CN') : '',
+        }))
+      );
+      XLSX.utils.book_append_sheet(wb, wsTodos, '待办事项');
+
+      const wsLinks = XLSX.utils.json_to_sheet(allQuickLinks);
+      XLSX.utils.book_append_sheet(wb, wsLinks, '快速链接');
+
+      const wsIcons = XLSX.utils.json_to_sheet(
+        globalQuickIcons.map((i) => ({ 标题: i.title, URL: i.url, 来源: i.titleSource }))
+      );
+      XLSX.utils.book_append_sheet(wb, wsIcons, '全局快捷图标');
+
+      const wsFiles = XLSX.utils.json_to_sheet(allFileShortcuts);
+      XLSX.utils.book_append_sheet(wb, wsFiles, '文件快捷方式');
+
+      const safeAiSettings = { ...aiSettings, apiKey: aiSettings.apiKey ? '***' : '' };
+      const wsAi = XLSX.utils.json_to_sheet([
+        { 项目: '模型', 值: safeAiSettings.provider },
+        { 项目: 'API Key', 值: safeAiSettings.apiKey },
+        { 项目: 'Base URL', 值: safeAiSettings.customBaseUrl || '' },
+        { 项目: '模型名称', 值: safeAiSettings.customModel || '' },
+        { 项目: '截图快捷键', 值: safeAiSettings.shortcutKey || '' },
+      ]);
+      XLSX.utils.book_append_sheet(wb, wsAi, 'AI 设置');
+
+      const wsToken = XLSX.utils.json_to_sheet([
+        { 项目: '今日消耗', 值: tokenStats.today || 0 },
+        { 项目: '本月消耗', 值: tokenStats.month || 0 },
+        { 项目: '上次请求', 值: tokenStats.lastRequest || 0 },
+      ]);
+      XLSX.utils.book_append_sheet(wb, wsToken, 'Token 统计');
+
+      XLSX.writeFile(wb, excelPath);
+
+      // 生成 JSON 备份（完整数据，含敏感信息，用于恢复）
+      const backupData = {
+        _meta: { appName: 'DesktopSecretary', version: '1.0.0', exportedAt: new Date().toISOString() },
+        workspaces,
+        todosGlobal,
+        globalQuickIcons,
+        aiSettings,
+        tokenStats,
+        fileShortcutViewMode: store.get('fileShortcutViewMode', 'icons'),
+        dockedEdge: store.get('dockedEdge', null),
+        dockBounds: store.get('dockBounds', null),
+        dockEdgeOffset: store.get('dockEdgeOffset', null),
+        windowWidthPercent: store.get('windowWidthPercent', 1.0),
+        autoLaunch: store.get('autoLaunch', false),
+      };
+      for (const ws of workspaces) {
+        backupData[`quickLinks:${ws.id}`] = store.get(`quickLinks:${ws.id}`, {});
+        backupData[`fileShortcuts:${ws.id}`] = store.get(`fileShortcuts:${ws.id}`, []);
+      }
+      // 保留 linkCache
+      backupData.linkCache = store.get('linkCache', {});
+
+      fs.writeFileSync(backupPath, JSON.stringify(backupData, null, 2), 'utf-8');
+
+      return { success: true, excelPath, backupPath };
+    } catch (err) {
+      console.error('[DataExport] 导出失败:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  /** data:import — 从 JSON 备份恢复数据 */
+  ipcMain.handle('data:import', async () => {
+    try {
+      const { filePaths } = await dialog.showOpenDialog(mainWindow, {
+        title: '导入备份',
+        properties: ['openFile'],
+        filters: [{ name: 'JSON 备份', extensions: ['json'] }],
+      });
+      if (!filePaths || filePaths.length === 0) return { success: false, cancelled: true };
+
+      const content = fs.readFileSync(filePaths[0], 'utf-8');
+      const data = JSON.parse(content);
+
+      if (!data._meta || data._meta.appName !== 'DesktopSecretary') {
+        return { success: false, error: '无效的备份文件（缺少 DesktopSecretary 标识）' };
+      }
+
+      // 恢复所有数据键
+      for (const [key, value] of Object.entries(data)) {
+        if (key.startsWith('_')) continue;
+        store.set(key, value);
+      }
+
+      return { success: true, message: '数据已恢复，建议重启应用以确保所有组件重新加载。' };
+    } catch (err) {
+      console.error('[DataImport] 导入失败:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  /** data:stats — 获取存储统计 */
+  ipcMain.handle('data:stats', () => {
+    try {
+      const stats = fs.statSync(store.path);
+      const fileSize = stats.size;
+      const fileSizeFormatted =
+        fileSize < 1024
+          ? `${fileSize} B`
+          : fileSize < 1024 * 1024
+            ? `${(fileSize / 1024).toFixed(1)} KB`
+            : `${(fileSize / (1024 * 1024)).toFixed(1)} MB`;
+
+      const workspaces = store.get('workspaces', []);
+      const todos = store.get('todosGlobal', []).length;
+      let links = 0;
+      let fileShortcuts = 0;
+      for (const ws of workspaces) {
+        const ql = store.get(`quickLinks:${ws.id}`, {});
+        for (const group of Object.values(ql)) {
+          links += (group.links || []).length;
+        }
+        fileShortcuts += store.get(`fileShortcuts:${ws.id}`, []).length;
+      }
+      const globalIcons = store.get('globalQuickIcons', []).length;
+
+      return {
+        success: true,
+        fileSize,
+        fileSizeFormatted,
+        counts: {
+          workspaces: workspaces.length,
+          todos,
+          links,
+          fileShortcuts,
+          globalIcons,
+        },
+      };
+    } catch (err) {
+      console.error('[DataStats] 统计失败:', err);
+      return { success: false, error: err.message };
+    }
   });
 }
 
 app.whenReady().then(async () => {
   try {
+    platform.windowOptions.applyAppLevelPlatformSetup(app);
     await initStore();
     registerIpcHandlers();
     await createWindow();
-    // 预创建截图 overlay 窗口（隐藏），点击时直接 show() 不需重新初始化
-    await precreateOverlayWindow();
     console.log('createWindow() completed, window count:', BrowserWindow.getAllWindows().length);
+
+    // 预创建截图 overlay（每块屏一个，常驻隐藏），截图时直接 show
+    ensureOverlayReady().catch((err) => {
+      console.error('[Screenshot] overlay 预创建失败（首次截图时会重试）:', err);
+    });
+    attachDisplayChangeListeners();
+
+    // 启动时默认展开并锁定，需手动取消图钉才允许收起
+    dockPinned = true;
+    expandDock('startup');
+
+    // 应用开机自启设置
+    const autoLaunch = store.get('autoLaunch', false);
+    app.setLoginItemSettings({ openAtLogin: !!autoLaunch });
+
+    // 启动时清理过期缓存
+    cleanupLinkCache();
 
     // 启动时自动注册保存的快捷键
     const savedSettings = store.get('aiSettings', {});
     if (savedSettings.shortcutKey) {
-      const result = await new Promise((resolve) => {
+      const accelerator = platform.shortcuts.normalizeShortcut(savedSettings.shortcutKey);
+      await new Promise((resolve) => {
         if (registeredShortcut) {
           try { globalShortcut.unregister(registeredShortcut); } catch {}
           registeredShortcut = null;
         }
         try {
-          const ok = globalShortcut.register(savedSettings.shortcutKey, () => {
+          const ok = globalShortcut.register(accelerator, () => {
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send('shortcut-triggered');
             }
           });
           if (ok) {
-            registeredShortcut = savedSettings.shortcutKey;
-            console.log(`[Shortcut] 启动时自动注册: ${savedSettings.shortcutKey}`);
+            registeredShortcut = accelerator;
+            console.log(`[Shortcut] 启动时自动注册: ${accelerator}`);
           }
           resolve(ok);
         } catch (err) {

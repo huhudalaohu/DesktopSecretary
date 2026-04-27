@@ -16,38 +16,31 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { ChevronRight, ChevronDown, Pencil, Trash2, GripVertical, Loader2, X, Circle } from 'lucide-react';
+import { ChevronRight, ChevronDown, Pencil, Trash2, GripVertical, Loader2, X, Circle, Plus } from 'lucide-react';
 
 const api = window.desktopAPI;
 
 // ===== 预设分组定义 =====
 const DEFAULT_GROUPS = {
-  feishu: {
-    name: '飞书文档',
+  docs: {
+    name: '文档',
     expanded: true,
-    links: [
-      { id: 'preset-feishu', url: 'https://docs.feishu.cn', title: '飞书文档', addedAt: '2026-04-09', titleSource: 'manual' },
-    ],
+    links: [],
   },
-  tencent: {
-    name: '腾讯文档',
+  workflow: {
+    name: '流程系统',
     expanded: true,
-    links: [
-      { id: 'preset-tencent', url: 'https://docs.qq.com', title: '腾讯文档', addedAt: '2026-04-09', titleSource: 'manual' },
-    ],
+    links: [],
   },
-  oa: {
-    name: 'OA系统',
+  dataPlatform: {
+    name: '数据平台',
     expanded: true,
     links: [],
   },
   thirdParty: {
     name: '第三方工具',
     expanded: true,
-    links: [
-      { id: 'preset-notion', url: 'https://www.notion.so', title: 'Notion', addedAt: '2026-04-09', titleSource: 'manual' },
-      { id: 'preset-yuque', url: 'https://www.yuque.com', title: '语雀', addedAt: '2026-04-09', titleSource: 'manual' },
-    ],
+    links: [],
   },
   uncategorized: {
     name: '未分类',
@@ -56,15 +49,15 @@ const DEFAULT_GROUPS = {
   },
 };
 
-const GROUP_ORDER = ['feishu', 'tencent', 'oa', 'thirdParty', 'uncategorized'];
+const GROUP_ORDER = ['docs', 'workflow', 'dataPlatform', 'thirdParty', 'uncategorized'];
 
 // 分组色条颜色（用于左侧 2px 色条区分）
 const GROUP_ACCENT = {
-  feishu: 'bg-blue-400',
-  tencent: 'bg-green-400',
-  oa: 'bg-amber-400',
+  docs: 'bg-blue-400',
+  workflow: 'bg-amber-400',
+  dataPlatform: 'bg-cyan-400',
   thirdParty: 'bg-purple-400',
-  uncategorized: 'bg-white/20',
+  uncategorized: 'bg-gray-300',
 };
 
 // ===== 并发控制 =====
@@ -121,12 +114,69 @@ function getFaviconUrl(url) {
 function classifyUrl(hostname, pathname) {
   const h = hostname.toLowerCase();
   const p = (pathname || '').toLowerCase();
-  if (h.includes('feishu.cn') || h.includes('feishu.com') || h.includes('larksuite.com') || h.includes('larkoffice.com')) return 'feishu';
-  if (h.includes('docs.qq.com') || h.includes('sheets.qq.com') || h.includes('drive.qq.com') || h.includes('slides.qq.com') || h.includes('doc.weixin.qq.com')) return 'tencent';
-  if (/\/(docx|wiki|sheets|base|minutes|mindnotes|file|drive)\//i.test(p)) return 'feishu';
-  if (/\/(sheet|doc|slide|file)\//i.test(p)) return 'tencent';
-  if (h.startsWith('oa.') || h.includes('.oa.')) return 'oa';
-  if (h.includes('notion.so') || h.includes('yuque.com')) return 'thirdParty';
+
+  // ===== 文档类 =====
+  // 飞书 / Lark
+  if (h.includes('feishu.cn') || h.includes('feishu.com') || h.includes('larksuite.com') || h.includes('larkoffice.com')) return 'docs';
+  // 腾讯文档
+  if (h.includes('docs.qq.com') || h.includes('sheets.qq.com') || h.includes('drive.qq.com') || h.includes('slides.qq.com') || h.includes('doc.weixin.qq.com')) return 'docs';
+  // Google Docs / Drive
+  if (h.includes('docs.google.com') || h.includes('drive.google.com') || h.includes('docs.googleusercontent.com')) return 'docs';
+  // Microsoft Office / OneDrive / SharePoint
+  if (h.includes('office.com') || h.includes('sharepoint.com') || h.includes('onedrive.live.com') || h.includes('live.com')) return 'docs';
+  // 石墨文档
+  if (h.includes('shimo.im')) return 'docs';
+  // WPS / 金山文档
+  if (h.includes('kdocs.cn') || h.includes('wps.cn') || h.includes('365docs.cn') || h.includes('docer.wps.cn')) return 'docs';
+  // Confluence / Atlassian
+  if (h.includes('confluence.') || h.includes('atlassian.net') || h.includes('jira.')) return 'docs';
+  // Notion
+  if (h.includes('notion.so') || h.includes('notion.site')) return 'docs';
+  // 语雀
+  if (h.includes('yuque.com') || h.includes('yuque.antgroup.com')) return 'docs';
+  // Coda
+  if (h.includes('coda.io')) return 'docs';
+  // Dropbox Paper
+  if (h.includes('paper.dropbox.com') || h.includes('dropbox.com/paper')) return 'docs';
+  // HackMD
+  if (h.includes('hackmd.io')) return 'docs';
+  // 腾讯乐享
+  if (h.includes('lexiangla.com')) return 'docs';
+  // 钉钉文档
+  if (h.includes('alidocs.dingtalk.com') || h.includes('docs.dingtalk.com')) return 'docs';
+  // 百度文库/百度网盘文档
+  if (h.includes('wenku.baidu.com') || h.includes('pan.baidu.com')) return 'docs';
+  // 有道云笔记
+  if (h.includes('note.youdao.com')) return 'docs';
+  // 印象笔记 / Evernote
+  if (h.includes('evernote.com') || h.includes('yinxiang.com')) return 'docs';
+  // 腾讯微云
+  if (h.includes('weiyun.com')) return 'docs';
+  // 阿里云盘
+  if (h.includes('aliyundrive.com') || h.includes('alipan.com')) return 'docs';
+  // 飞书多维表格 / 知识库 等路径特征
+  if (/\/(docx|wiki|sheets?|base|minutes|mindnotes|file|drive|doc|slide|document|spreadsheets?|presentation|白板|whiteboard)\//i.test(p)) return 'docs';
+
+  // ===== 流程系统 =====
+  if (h.startsWith('oa.') || h.includes('.oa.')) return 'workflow';
+  if (h.includes('bpm.') || h.includes('.bpm.')) return 'workflow';
+  if (h.includes('approval') || h.includes('审批') || h.includes('shenpi')) return 'workflow';
+  if (h.includes('workflow') || h.includes('.workflow.')) return 'workflow';
+  if (h.includes('process') || h.includes('.process.')) return 'workflow';
+  if (h.includes('flow') || h.includes('.flow.')) return 'workflow';
+
+  // ===== 数据平台 =====
+  if (h.includes('bi.') || h.includes('.bi.')) return 'dataPlatform';
+  if (h.includes('data.') || h.includes('.data.')) return 'dataPlatform';
+  if (h.includes('dashboard') || h.includes('.dashboard.')) return 'dataPlatform';
+  if (h.includes('grafana') || h.includes('kibana') || h.includes('metabase')) return 'dataPlatform';
+  if (h.includes('superset') || h.includes('tableau') || h.includes('powerbi') || h.includes('power-bi')) return 'dataPlatform';
+  if (h.includes('dataplat') || h.includes('data-platform') || h.includes('data_platform')) return 'dataPlatform';
+  if (h.includes('analytics') || h.includes('.analytics.')) return 'dataPlatform';
+  if (h.includes('report') || h.includes('.report.')) return 'dataPlatform';
+  if (h.includes('clickhouse') || h.includes('hive') || h.includes('presto') || h.includes('spark')) return 'dataPlatform';
+  if (h.includes('dolphinscheduler') || h.includes('airflow') || h.includes('azkaban')) return 'dataPlatform';
+
   return 'uncategorized';
 }
 
@@ -135,20 +185,26 @@ function getPathPrefixHint(url) {
     const u = new URL(url);
     const p = u.pathname.toLowerCase();
     const h = u.hostname.toLowerCase();
-    const isFeishu = h.includes('feishu') || h.includes('larksuite') || h.includes('larkoffice');
-    const isTencent = h.includes('qq.com') || h.includes('weixin.qq.com');
-    if (isFeishu) {
-      if (/\/docx\//.test(p)) return '飞书文档';
-      if (/\/sheets?\//.test(p)) return '飞书表格';
-      if (/\/wiki\//.test(p)) return '飞书知识库';
-      if (/\/base\//.test(p)) return '飞书多维表格';
-      if (/\/minutes\//.test(p)) return '飞书会议纪要';
-      if (/\/mindnotes\//.test(p)) return '飞书思维导图';
-    }
-    if (isTencent) {
-      if (/\/sheet\//.test(p)) return '腾讯表格';
-      if (/\/doc\//.test(p)) return '腾讯文档';
-      if (/\/slide\//.test(p)) return '腾讯幻灯片';
+    const isDoc =
+      h.includes('feishu') || h.includes('larksuite') || h.includes('larkoffice') ||
+      h.includes('qq.com') || h.includes('weixin.qq.com') ||
+      h.includes('docs.google') || h.includes('drive.google') ||
+      h.includes('office.com') || h.includes('sharepoint') ||
+      h.includes('shimo.im') || h.includes('kdocs') || h.includes('wps') ||
+      h.includes('confluence') || h.includes('atlassian') ||
+      h.includes('notion') || h.includes('yuque');
+    if (isDoc) {
+      if (/\/docx?\//.test(p)) return '文档';
+      if (/\/sheets?\//.test(p)) return '表格';
+      if (/\/wiki\//.test(p)) return '知识库';
+      if (/\/base\//.test(p)) return '多维表格';
+      if (/\/minutes\//.test(p)) return '会议纪要';
+      if (/\/mindnotes\//.test(p)) return '思维导图';
+      if (/\/slide\//.test(p)) return '幻灯片';
+      if (/\/file\//.test(p)) return '文件';
+      if (/\/document\//.test(p)) return '文档';
+      if (/\/spreadsheets?\//.test(p)) return '表格';
+      if (/\/presentation\//.test(p)) return '演示文稿';
     }
   } catch {}
   return null;
@@ -257,11 +313,11 @@ function SourceBadge({ source }) {
   const b = badges[source];
   if (!b) return null;
   const colors = {
-    green: ['text-green-400/60', 'bg-green-400/70'],
-    blue: ['text-blue-400/60', 'bg-blue-400/70'],
-    gray: ['text-white/20', 'bg-white/25'],
-    orange: ['text-orange-400/60', 'bg-orange-400/70'],
-    red: ['text-red-400/40', 'bg-red-400/50'],
+    green: ['text-green-500', 'bg-green-500'],
+    blue: ['text-blue-500', 'bg-blue-500'],
+    gray: ['text-gray-400', 'bg-gray-400'],
+    orange: ['text-orange-500', 'bg-orange-500'],
+    red: ['text-red-500', 'bg-red-500'],
   };
   const [textCls, dotCls] = colors[b[1]] || colors.gray;
   return (
@@ -273,7 +329,7 @@ function SourceBadge({ source }) {
 }
 
 function SkeletonBar() {
-  return <div className="h-3 bg-white/10 rounded animate-pulse" style={{ width: '60%' }} />;
+  return <div className="h-3 bg-[#E5E5E5] rounded animate-pulse" style={{ width: '60%' }} />;
 }
 
 export default function QuickLinks({ activeWorkspace }) {
@@ -292,8 +348,48 @@ export default function QuickLinks({ activeWorkspace }) {
   const timersRef = useRef({}); // linkId → interval
   const cancelledRef = useRef(new Set()); // 已取消的 linkId
 
+  // ===== 全局快捷图标栏状态 =====
+  const [globalIcons, setGlobalIcons] = useState([]);
+  const [editingGlobalId, setEditingGlobalId] = useState(null);
+  const [editingGlobalTitle, setEditingGlobalTitle] = useState('');
+  const [globalDragIndex, setGlobalDragIndex] = useState(null);
+  const [globalDropIndex, setGlobalDropIndex] = useState(null);
+  const [addingGlobal, setAddingGlobal] = useState(false);
+  const [addingGlobalInput, setAddingGlobalInput] = useState('');
+  const [dropHighlight, setDropHighlight] = useState(false);
+  const [globalNotice, setGlobalNotice] = useState('');
+  // 全局图标识别倒计时：{ iconId: seconds }
+  const [globalCountdowns, setGlobalCountdowns] = useState({});
+  // 正在识别的全局图标 id 集合
+  const [globalLoadingIds, setGlobalLoadingIds] = useState(new Set());
+  const globalTimersRef = useRef({}); // iconId → interval
+  const globalCancelledRef = useRef(new Set()); // 已取消的全局图标 id
+
   // 存储键按工作区分隔
   const storeKey = `quickLinks:${activeWorkspace}`;
+
+  // 旧数据迁移：把 feishu+tencent → docs，oa → workflow
+  function migrateGroups(saved) {
+    if (!saved) return null;
+    const hasOldKeys = saved.feishu || saved.tencent || saved.oa;
+    if (!hasOldKeys) return saved;
+    const migrated = { ...DEFAULT_GROUPS };
+    const docsLinks = [
+      ...(saved.feishu?.links || []),
+      ...(saved.tencent?.links || []),
+      ...(saved.thirdParty?.links || []),
+    ];
+    if (docsLinks.length > 0) {
+      migrated.docs = { ...migrated.docs, links: docsLinks };
+    }
+    if (saved.oa?.links?.length > 0) {
+      migrated.workflow = { ...migrated.workflow, links: saved.oa.links };
+    }
+    if (saved.uncategorized?.links?.length > 0) {
+      migrated.uncategorized = { ...migrated.uncategorized, links: saved.uncategorized.links };
+    }
+    return migrated;
+  }
 
   useEffect(() => {
     // 切换工作区时清理定时器和状态
@@ -308,13 +404,31 @@ export default function QuickLinks({ activeWorkspace }) {
         setGroups(DEFAULT_GROUPS);
         api.storeSet(storeKey, DEFAULT_GROUPS);
       } else {
-        setGroups(saved);
+        const migrated = migrateGroups(saved);
+        if (migrated !== saved) {
+          setGroups(migrated);
+          api.storeSet(storeKey, migrated);
+        } else {
+          setGroups(saved);
+        }
       }
     });
     return () => {
       Object.values(timersRef.current).forEach(clearInterval);
     };
   }, [storeKey]);
+
+  // 加载全局快捷图标（不随工作区变化）
+  useEffect(() => {
+    api.storeGet('globalQuickIcons', []).then((data) => {
+      // 清理可能残留的 loading 项（上次异常退出）
+      const cleaned = (data || []).filter((i) => i.titleSource !== 'loading');
+      setGlobalIcons(cleaned);
+    });
+    return () => {
+      Object.values(globalTimersRef.current).forEach(clearInterval);
+    };
+  }, []);
 
   const saveGroups = useCallback(async (updated) => {
     setGroups(updated);
@@ -551,18 +665,7 @@ export default function QuickLinks({ activeWorkspace }) {
     setEditingTitle('');
   };
 
-  const moveToGroup = (fromGroupId, linkId, toGroupId) => {
-    if (fromGroupId === toGroupId) { setContextMenu(null); return; }
-    const link = groups[fromGroupId].links.find((l) => l.id === linkId);
-    if (!link) return;
-    const updated = {
-      ...groups,
-      [fromGroupId]: { ...groups[fromGroupId], links: groups[fromGroupId].links.filter((l) => l.id !== linkId) },
-      [toGroupId]: { ...groups[toGroupId], links: [...groups[toGroupId].links, link] },
-    };
-    saveGroups(updated);
-    setContextMenu(null);
-  };
+
 
   const handleDragStart = (e, groupId, index) => {
     setDragInfo({ groupId, index });
@@ -576,23 +679,415 @@ export default function QuickLinks({ activeWorkspace }) {
 
   const handleDrop = (e, groupId, targetIndex) => {
     e.preventDefault();
-    if (!dragInfo || dragInfo.groupId !== groupId) { setDragInfo(null); return; }
-    const { index: fromIndex } = dragInfo;
-    if (fromIndex === targetIndex) { setDragInfo(null); return; }
-    const links = [...groups[groupId].links];
-    const [moved] = links.splice(fromIndex, 1);
-    links.splice(targetIndex, 0, moved);
-    saveGroups({ ...groups, [groupId]: { ...groups[groupId], links } });
+    const raw = e.dataTransfer.getData('x-quicklink-drag');
+    if (!raw) { setDragInfo(null); return; }
+    let fromGroupId, fromIndex;
+    try {
+      const data = JSON.parse(raw);
+      fromGroupId = data.groupId;
+      fromIndex = data.index;
+    } catch { setDragInfo(null); return; }
+
+    if (fromGroupId === groupId) {
+      // 同组内排序
+      if (fromIndex === targetIndex) { setDragInfo(null); return; }
+      const links = [...groups[groupId].links];
+      const [moved] = links.splice(fromIndex, 1);
+      links.splice(targetIndex, 0, moved);
+      saveGroups({ ...groups, [groupId]: { ...groups[groupId], links } });
+    } else {
+      // 跨组移动
+      const link = groups[fromGroupId].links[fromIndex];
+      if (!link) { setDragInfo(null); return; }
+      const fromLinks = [...groups[fromGroupId].links];
+      fromLinks.splice(fromIndex, 1);
+      const toLinks = [...groups[groupId].links];
+      toLinks.splice(targetIndex, 0, link);
+      saveGroups({
+        ...groups,
+        [fromGroupId]: { ...groups[fromGroupId], links: fromLinks },
+        [groupId]: { ...groups[groupId], links: toLinks },
+      });
+    }
     setDragInfo(null);
+  };
+
+  // 拖到组标题上 → 跨组移动并追加到末尾
+  const handleGroupDrop = (e, groupId) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const raw = e.dataTransfer.getData('x-quicklink-drag');
+    if (!raw) { setDragInfo(null); return; }
+    let fromGroupId, fromIndex;
+    try {
+      const data = JSON.parse(raw);
+      fromGroupId = data.groupId;
+      fromIndex = data.index;
+    } catch { setDragInfo(null); return; }
+    if (fromGroupId === groupId) { setDragInfo(null); return; }
+    const link = groups[fromGroupId]?.links[fromIndex];
+    if (!link) { setDragInfo(null); return; }
+    const fromLinks = [...groups[fromGroupId].links];
+    fromLinks.splice(fromIndex, 1);
+    const toLinks = [...groups[groupId].links, link];
+    saveGroups({
+      ...groups,
+      [fromGroupId]: { ...groups[fromGroupId], links: fromLinks },
+      [groupId]: { ...groups[groupId], links: toLinks, expanded: true },
+    });
+    setDragInfo(null);
+  };
+
+  // ===== 全局快捷图标栏逻辑 =====
+  const saveGlobalIcons = async (updated) => {
+    setGlobalIcons(updated);
+    await api.storeSet('globalQuickIcons', updated);
+  };
+
+  const addGlobalIcon = async (data) => {
+    const url = data.url;
+    if (globalIcons.find((i) => i.url === url)) {
+      setGlobalNotice('该链接已存在');
+      setTimeout(() => setGlobalNotice(''), 1500);
+      return false;
+    }
+    if (globalIcons.length >= 15) {
+      setGlobalNotice('最多 3 行，请先删除部分图标');
+      setTimeout(() => setGlobalNotice(''), 1500);
+      return false;
+    }
+
+    // 0层：剪贴板分割或传入的标题直接命中
+    const split = data.title ? { name: data.title, url } : splitClipboard(url);
+    if (split) {
+      const newIcon = {
+        id: `gicon-${Date.now()}`,
+        url: split.url,
+        title: split.name,
+        favicon: getFaviconUrl(split.url),
+        titleSource: 'clipboard-split',
+      };
+      await saveGlobalIcons([...globalIcons, newIcon]);
+      return true;
+    }
+
+    // 带数据也直接添加（如拖拽已识别好的链接）
+    if (data.title && data.title !== '正在识别...') {
+      const newIcon = {
+        id: `gicon-${Date.now()}`,
+        url,
+        title: data.title,
+        favicon: data.favicon || getFaviconUrl(url),
+        titleSource: data.titleSource || 'manual',
+      };
+      await saveGlobalIcons([...globalIcons, newIcon]);
+      return true;
+    }
+
+    // 进入自动识别流程
+    const tempId = `gicon-loading-${Date.now()}`;
+    const tempIcon = {
+      id: tempId,
+      url,
+      title: '正在识别...',
+      favicon: getFaviconUrl(url),
+      titleSource: 'loading',
+    };
+    const withTemp = [...globalIcons, tempIcon];
+    await saveGlobalIcons(withTemp);
+    startGlobalCountdown(tempId);
+
+    await acquireSlot();
+    if (globalCancelledRef.current.has(tempId)) {
+      globalCancelledRef.current.delete(tempId);
+      releaseSlot();
+      return false;
+    }
+
+    try {
+      const { title, favicon, source } = await resolveTitle(url);
+      if (globalCancelledRef.current.has(tempId)) {
+        globalCancelledRef.current.delete(tempId);
+        releaseSlot();
+        return false;
+      }
+      stopGlobalCountdown(tempId);
+      const finalIcon = {
+        id: tempId.replace('gicon-loading-', 'gicon-'),
+        url,
+        title,
+        favicon: favicon || getFaviconUrl(url),
+        titleSource: source,
+      };
+      const latest = await api.storeGet('globalQuickIcons', []);
+      await saveGlobalIcons(latest.map((i) => (i.id === tempId ? finalIcon : i)));
+      return true;
+    } catch {
+      stopGlobalCountdown(tempId);
+      const fallbackTitle = timeoutFallback(url).title;
+      const finalIcon = {
+        id: tempId.replace('gicon-loading-', 'gicon-'),
+        url,
+        title: fallbackTitle,
+        favicon: getFaviconUrl(url),
+        titleSource: 'fallback',
+      };
+      const latest = await api.storeGet('globalQuickIcons', []);
+      await saveGlobalIcons(latest.map((i) => (i.id === tempId ? finalIcon : i)));
+      return true;
+    } finally {
+      releaseSlot();
+    }
+  };
+
+  const startGlobalCountdown = (iconId) => {
+    setGlobalLoadingIds((prev) => new Set(prev).add(iconId));
+    setGlobalCountdowns((prev) => ({ ...prev, [iconId]: 3 }));
+    globalTimersRef.current[iconId] = setInterval(() => {
+      setGlobalCountdowns((prev) => {
+        const next = (prev[iconId] || 1) - 1;
+        if (next <= 0) {
+          clearInterval(globalTimersRef.current[iconId]);
+          delete globalTimersRef.current[iconId];
+          return { ...prev, [iconId]: 0 };
+        }
+        return { ...prev, [iconId]: next };
+      });
+    }, 1000);
+  };
+
+  const stopGlobalCountdown = (iconId) => {
+    if (globalTimersRef.current[iconId]) {
+      clearInterval(globalTimersRef.current[iconId]);
+      delete globalTimersRef.current[iconId];
+    }
+    setGlobalCountdowns((prev) => { const n = { ...prev }; delete n[iconId]; return n; });
+    setGlobalLoadingIds((prev) => { const s = new Set(prev); s.delete(iconId); return s; });
+  };
+
+  const cancelGlobalRecognition = async (iconId) => {
+    globalCancelledRef.current.add(iconId);
+    stopGlobalCountdown(iconId);
+    await saveGlobalIcons(globalIcons.filter((i) => i.id !== iconId));
+  };
+
+  const deleteGlobalIcon = async (id) => {
+    await saveGlobalIcons(globalIcons.filter((i) => i.id !== id));
+    setContextMenu(null);
+  };
+
+  const confirmEditGlobalIcon = async () => {
+    const trimmed = editingGlobalTitle.trim();
+    if (!trimmed) { setEditingGlobalId(null); return; }
+    await saveGlobalIcons(globalIcons.map((i) =>
+      i.id === editingGlobalId ? { ...i, title: trimmed } : i
+    ));
+    setEditingGlobalId(null);
+    setEditingGlobalTitle('');
+  };
+
+  const reorderGlobalIcons = async (fromIndex, toIndex) => {
+    const updated = [...globalIcons];
+    const [moved] = updated.splice(fromIndex, 1);
+    updated.splice(toIndex, 0, moved);
+    await saveGlobalIcons(updated);
+  };
+
+  const handleGlobalDrop = async (e) => {
+    e.preventDefault();
+    setDropHighlight(false);
+    const raw = e.dataTransfer.getData('application/json');
+    if (raw) {
+      try {
+        const data = JSON.parse(raw);
+        if (data && data.url) {
+          const ok = await addGlobalIcon(data);
+          if (ok && data.fromGroupId && data.fromLinkId) {
+            deleteLink(data.fromGroupId, data.fromLinkId);
+          }
+        }
+      } catch {}
+    }
   };
 
   if (!groups) return null;
 
   return (
     <div>
-      <div className="text-xs font-semibold text-white/50 uppercase tracking-wider mb-2">快速入口</div>
+      <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">快速入口</div>
 
-      <div className="rounded-xl bg-white/5 border border-white/10 p-2.5">
+      <div className="rounded-lg bg-white border border-[#E5E5E5] p-2.5 shadow-sm">
+        {/* 全局快捷图标栏 */}
+        {globalNotice && <div className="mb-1 text-[10px] text-amber-500">{globalNotice}</div>}
+        <div className="mb-2">
+          <div className="flex flex-wrap gap-2 content-start max-h-[102px] overflow-hidden">
+            {globalIcons.map((icon, index) => {
+              const isLoading = icon.titleSource === 'loading';
+              const cd = globalCountdowns[icon.id];
+              const isTimedOut = cd !== undefined && cd <= 0;
+
+              if (editingGlobalId === icon.id) {
+                return (
+                  <input
+                    key={icon.id}
+                    autoFocus
+                    value={editingGlobalTitle}
+                    onChange={(e) => setEditingGlobalTitle(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') confirmEditGlobalIcon();
+                      if (e.key === 'Escape') { setEditingGlobalId(null); setEditingGlobalTitle(''); }
+                    }}
+                    onBlur={confirmEditGlobalIcon}
+                    onClick={(e) => e.stopPropagation()}
+                    className="w-24 px-2 py-1 rounded-md text-xs bg-white text-gray-800 border border-[#0099FF] outline-none flex-shrink-0"
+                  />
+                );
+              }
+
+              if (isLoading && !isTimedOut) {
+                return (
+                  <div
+                    key={icon.id}
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white border border-[#E5E5E5] flex-shrink-0 min-w-[80px]"
+                  >
+                    <SkeletonBar />
+                    <span className="text-[9px] text-[#0099FF] flex-shrink-0">
+                      {cd !== undefined ? `${cd}s` : '...'}
+                    </span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); cancelGlobalRecognition(icon.id); }}
+                      className="p-0.5 rounded hover:bg-[#EBEBEB] text-gray-300 hover:text-red-500 transition-colors flex-shrink-0"
+                      title="取消识别"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                );
+              }
+
+              return (
+                <div
+                  key={icon.id}
+                  draggable={!isLoading}
+                  onDragStart={(e) => {
+                    setGlobalDragIndex(index);
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', index.toString());
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                    setGlobalDropIndex(index);
+                  }}
+                  onDragLeave={() => {
+                    if (globalDropIndex === index) setGlobalDropIndex(null);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    const from = parseInt(e.dataTransfer.getData('text/plain'), 10);
+                    if (!Number.isNaN(from) && from !== index) {
+                      reorderGlobalIcons(from, index);
+                    }
+                    setGlobalDragIndex(null);
+                    setGlobalDropIndex(null);
+                  }}
+                  onDragEnd={() => {
+                    setGlobalDragIndex(null);
+                    setGlobalDropIndex(null);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setContextMenu({ x: e.clientX, y: e.clientY, type: 'globalIcon', icon });
+                  }}
+                  onClick={() => !isLoading && api.openExternal(icon.url)}
+                  className={`group flex items-center gap-1.5 px-2 py-1 rounded-md bg-white border border-[#E5E5E5] hover:bg-[#EBEBEB] cursor-pointer transition-colors flex-shrink-0 ${
+                    globalDragIndex === index ? 'opacity-30' : ''
+                  } ${globalDropIndex === index && globalDragIndex !== index ? 'border-l-2 border-blue-400' : ''}`}
+                  title={icon.url}
+                >
+                  <img
+                    src={icon.favicon || getFaviconUrl(icon.url)}
+                    alt=""
+                    className="w-4 h-4 rounded-sm flex-shrink-0"
+                    onError={(e) => { e.target.style.display = 'none'; }}
+                  />
+                  <span className={`text-xs truncate max-w-[80px] ${icon.titleSource === 'error-not-found' ? 'text-red-400 line-through' : 'text-gray-700'}`}>
+                    {icon.title}
+                  </span>
+                </div>
+              );
+            })}
+
+            {addingGlobal ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const raw = addingGlobalInput.trim();
+                  if (!raw) { setAddingGlobal(false); return; }
+                  let url = raw;
+                  if (!/^https?:\/\//.test(url)) url = 'https://' + url;
+                  addGlobalIcon({ url });
+                  setAddingGlobalInput('');
+                  setAddingGlobal(false);
+                }}
+                className="flex-shrink-0"
+              >
+                <input
+                  autoFocus
+                  value={addingGlobalInput}
+                  onChange={(e) => setAddingGlobalInput(e.target.value)}
+                  onBlur={() => {
+                    const raw = addingGlobalInput.trim();
+                    if (raw) {
+                      let url = raw;
+                      if (!/^https?:\/\//.test(url)) url = 'https://' + url;
+                      addGlobalIcon({ url });
+                    }
+                    setAddingGlobalInput('');
+                    setAddingGlobal(false);
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  placeholder="输入链接..."
+                  className="w-28 px-2 py-1 rounded-md text-xs bg-white text-gray-800 border border-[#0099FF] outline-none flex-shrink-0"
+                />
+              </form>
+            ) : (
+              <button
+                onClick={() => {
+                  if (globalIcons.length >= 15) {
+                    setGlobalNotice('最多 3 行，请先删除部分图标');
+                    setTimeout(() => setGlobalNotice(''), 1500);
+                    return;
+                  }
+                  setAddingGlobal(true);
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (globalIcons.length < 15) setDropHighlight(true);
+                }}
+                onDragLeave={() => setDropHighlight(false)}
+                onDrop={(e) => {
+                  if (globalIcons.length >= 15) return;
+                  handleGlobalDrop(e);
+                }}
+                disabled={globalIcons.length >= 15}
+                className={`flex-shrink-0 flex items-center justify-center h-[28px] px-2 min-w-[60px] rounded-md border border-dashed transition-colors ${
+                  globalIcons.length >= 15
+                    ? 'bg-[#F5F5F5] border-[#E5E5E5] text-gray-300 cursor-not-allowed'
+                    : dropHighlight
+                      ? 'bg-blue-50 border-blue-400 text-blue-500'
+                      : 'bg-white border-[#D4D4D4] text-gray-400 hover:border-[#0099FF] hover:text-[#0099FF]'
+                }`}
+                title={globalIcons.length >= 15 ? '最多 3 行，请先删除部分图标' : '点击添加或拖拽链接至此'}
+              >
+                <Plus size={14} />
+              </button>
+            )}
+          </div>
+          <div className="border-b border-[#E5E5E5] mt-1" />
+        </div>
+
         {/* 快速添加输入框 */}
         <div className="mb-2">
           <input
@@ -601,13 +1096,13 @@ export default function QuickLinks({ activeWorkspace }) {
             placeholder="粘贴文档链接，自动识别分类"
             onPaste={handlePaste}
             onKeyDown={handleInputKeydown}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder-white/25 outline-none focus:border-white/20 transition-colors"
+            className="w-full bg-white border border-[#E5E5E5] rounded-md px-2.5 py-1.5 text-xs text-gray-800 placeholder-gray-400 outline-none focus:border-[#0099FF] transition-colors"
           />
           {addingStatus === 'fetching' && (
-            <div className="text-[10px] text-blue-400/70 mt-1 px-1">正在获取信息...</div>
+            <div className="text-[10px] text-blue-500 mt-1 px-1">正在获取信息...</div>
           )}
           {addingStatus === 'done' && (
-            <div className="text-[10px] text-green-400/70 mt-1 px-1">已添加</div>
+            <div className="text-[10px] text-green-500 mt-1 px-1">已添加</div>
           )}
         </div>
 
@@ -623,22 +1118,27 @@ export default function QuickLinks({ activeWorkspace }) {
               {/* 紧凑分组标题：左侧色点 + 小字标签 + 箭头，hover 才显示完整背景 */}
               <div
                 onClick={() => toggleGroup(groupId)}
-                className="flex items-center gap-1 px-1.5 py-1 rounded hover:bg-white/5 cursor-pointer transition-colors select-none group/header"
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                }}
+                onDrop={(e) => handleGroupDrop(e, groupId)}
+                className="flex items-center gap-1 px-1.5 py-1 rounded hover:bg-[#EBEBEB] cursor-pointer transition-colors select-none group/header"
               >
                 <span className={`w-1.5 h-1.5 rounded-full ${accent} flex-shrink-0`} />
                 {group.expanded ? (
-                  <ChevronDown size={11} className="text-white/20 flex-shrink-0" />
+                  <ChevronDown size={11} className="text-gray-400 flex-shrink-0" />
                 ) : (
-                  <ChevronRight size={11} className="text-white/20 flex-shrink-0" />
+                  <ChevronRight size={11} className="text-gray-400 flex-shrink-0" />
                 )}
-                <span className="text-[10px] font-medium text-white/35 flex-1 truncate">{group.name}</span>
-                <span className="text-[9px] text-white/15 flex-shrink-0">{linkCount}</span>
+                <span className="text-[10px] font-medium text-gray-500 flex-1 truncate">{group.name}</span>
+                <span className="text-[9px] text-gray-300 flex-shrink-0">{linkCount}</span>
               </div>
 
               {group.expanded && (
-                <div className="ml-3 border-l border-white/[0.06]">
+                <div className="ml-3 border-l border-[#E5E5E5]">
                   {linkCount === 0 ? (
-                    <div className="text-[10px] text-white/15 py-1 px-2 ml-1">
+                    <div className="text-[10px] text-gray-300 py-1 px-2 ml-1">
                       暂无快捷方式，粘贴链接即可添加
                     </div>
                   ) : (
@@ -651,7 +1151,11 @@ export default function QuickLinks({ activeWorkspace }) {
                         <div
                           key={link.id}
                           draggable={!isLoading}
-                          onDragStart={(e) => handleDragStart(e, groupId, index)}
+                          onDragStart={(e) => {
+                            handleDragStart(e, groupId, index);
+                            e.dataTransfer.setData('x-quicklink-drag', JSON.stringify({ groupId, index }));
+                            e.dataTransfer.setData('application/json', JSON.stringify({ url: link.url, title: link.title, favicon: link.favicon, fromGroupId: groupId, fromLinkId: link.id }));
+                          }}
                           onDragOver={handleDragOver}
                           onDrop={(e) => handleDrop(e, groupId, index)}
                           onMouseEnter={() => setHoveredLink(link.id)}
@@ -660,7 +1164,7 @@ export default function QuickLinks({ activeWorkspace }) {
                             e.preventDefault();
                             setContextMenu({ x: e.clientX, y: e.clientY, groupId, link });
                           }}
-                          className="group flex items-center gap-1.5 px-1.5 py-[3px] rounded hover:bg-white/5 transition-colors cursor-pointer relative"
+                          className="group flex items-center gap-1.5 px-1.5 py-[3px] rounded hover:bg-[#EBEBEB] transition-colors cursor-pointer relative"
                           onDoubleClick={() => !isLoading && api.openExternal(link.url)}
                           title={link.url}
                         >
@@ -681,12 +1185,12 @@ export default function QuickLinks({ activeWorkspace }) {
                           {isLoading && !isTimedOut ? (
                             <>
                               <SkeletonBar />
-                              <span className="text-[9px] text-blue-400/50 flex-shrink-0">
+                              <span className="text-[9px] text-[#0099FF] flex-shrink-0">
                                 {cd !== undefined ? `${cd}s` : '...'}
                               </span>
                               <button
                                 onClick={(e) => { e.stopPropagation(); cancelRecognition(link.id, groupId); }}
-                                className="p-0.5 rounded hover:bg-white/10 text-white/30 hover:text-red-400/60 transition-colors flex-shrink-0"
+                                className="p-0.5 rounded hover:bg-[#EBEBEB] text-gray-300 hover:text-red-500 transition-colors flex-shrink-0"
                                 title="取消识别"
                               >
                                 <X size={10} />
@@ -705,12 +1209,12 @@ export default function QuickLinks({ activeWorkspace }) {
                               autoFocus
                               onClick={(e) => e.stopPropagation()}
                               placeholder="输入名称..."
-                              className="flex-1 bg-white/10 border border-white/20 rounded px-1 py-0.5 text-sm text-white placeholder-white/30 outline-none min-w-0"
+                              className="flex-1 bg-white border border-[#0099FF] rounded px-1 py-0.5 text-sm text-gray-800 placeholder-gray-400 outline-none min-w-0"
                             />
                           ) : (
                             <>
                               <span className={`flex-1 text-sm truncate min-w-0 ${
-                                link.titleSource === 'error-not-found' ? 'text-red-400/50 line-through' : 'text-gray-300'
+                                link.titleSource === 'error-not-found' ? 'text-red-400 line-through' : 'text-gray-700'
                               }`}>
                                 {link.title}
                               </span>
@@ -723,13 +1227,13 @@ export default function QuickLinks({ activeWorkspace }) {
                             <div className="flex items-center gap-0.5 flex-shrink-0 ml-0.5">
                               <button
                                 onClick={(e) => { e.stopPropagation(); startEdit(link); }}
-                                className="p-0.5 rounded hover:bg-white/10 text-white/30 hover:text-white/60 transition-colors"
+                                className="p-0.5 rounded hover:bg-[#EBEBEB] text-gray-300 hover:text-blue-500 transition-colors"
                               >
                                 <Pencil size={10} />
                               </button>
                               <button
                                 onClick={(e) => { e.stopPropagation(); deleteLink(groupId, link.id); }}
-                                className="p-0.5 rounded hover:bg-white/10 text-white/30 hover:text-red-400/60 transition-colors"
+                                className="p-0.5 rounded hover:bg-[#EBEBEB] text-gray-300 hover:text-red-500 transition-colors"
                               >
                                 <Trash2 size={10} />
                               </button>
@@ -748,33 +1252,54 @@ export default function QuickLinks({ activeWorkspace }) {
         {/* 右键上下文菜单 */}
         {contextMenu && (
           <div
-            className="ql-context-menu fixed z-50 bg-slate-800/95 backdrop-blur border border-white/10 rounded-lg shadow-xl py-1 min-w-[130px]"
+            className="ql-context-menu fixed z-50 bg-white border border-[#E5E5E5] rounded-lg shadow-lg py-1 min-w-[130px]"
             style={{ left: contextMenu.x, top: contextMenu.y }}
+            onClick={(e) => e.stopPropagation()}
           >
-            <button
-              onClick={() => startEdit(contextMenu.link)}
-              className="w-full text-left px-3 py-1.5 text-xs text-white/60 hover:bg-white/10 transition-colors"
-            >
-              编辑名称
-            </button>
-            <div className="border-t border-white/10 my-1" />
-            <div className="px-3 py-1 text-[10px] text-white/30">移动到</div>
-            {GROUP_ORDER.filter((id) => id !== contextMenu.groupId).map((id) => (
-              <button
-                key={id}
-                onClick={() => moveToGroup(contextMenu.groupId, contextMenu.link.id, id)}
-                className="w-full text-left px-3 py-1.5 text-xs text-white/50 hover:bg-white/10 transition-colors"
-              >
-                {groups[id]?.name}
-              </button>
-            ))}
-            <div className="border-t border-white/10 my-1" />
-            <button
-              onClick={() => deleteLink(contextMenu.groupId, contextMenu.link.id)}
-              className="w-full text-left px-3 py-1.5 text-xs text-red-400/80 hover:bg-white/10 transition-colors"
-            >
-              删除
-            </button>
+            {contextMenu.type === 'globalIcon' ? (
+              contextMenu.icon.titleSource === 'loading' ? (
+                <>
+                  <button
+                    onClick={() => { cancelGlobalRecognition(contextMenu.icon.id); setContextMenu(null); }}
+                    className="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-[#EBEBEB] transition-colors"
+                  >
+                    取消识别
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => { setEditingGlobalId(contextMenu.icon.id); setEditingGlobalTitle(contextMenu.icon.title); setContextMenu(null); }}
+                    className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-[#EBEBEB] transition-colors"
+                  >
+                    编辑名称
+                  </button>
+                  <div className="border-t border-[#E5E5E5] my-1" />
+                  <button
+                    onClick={() => deleteGlobalIcon(contextMenu.icon.id)}
+                    className="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-[#EBEBEB] transition-colors"
+                  >
+                    删除
+                  </button>
+                </>
+              )
+            ) : (
+              <>
+                <button
+                  onClick={() => startEdit(contextMenu.link)}
+                  className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-[#EBEBEB] transition-colors"
+                >
+                  编辑名称
+                </button>
+                <div className="border-t border-[#E5E5E5] my-1" />
+                <button
+                  onClick={() => deleteLink(contextMenu.groupId, contextMenu.link.id)}
+                  className="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-[#EBEBEB] transition-colors"
+                >
+                  删除
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>
