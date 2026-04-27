@@ -1,5 +1,14 @@
 // AI 助手共享配置
 
+// 内测预设配置（从 ai-preset.js 读取，如不存在则使用空默认值）
+let PRESET = {};
+try {
+  const m = await import('./ai-preset.js');
+  PRESET = m.AI_PRESET || {};
+} catch {
+  // ai-preset.js 不存在时使用空预设
+}
+
 export const MODEL_PROVIDERS = {
   kimi: {
     label: 'Kimi (Moonshot)',
@@ -78,11 +87,11 @@ export const MODEL_PROVIDERS = {
 export const PROVIDER_KEYS = Object.keys(MODEL_PROVIDERS);
 
 export const DEFAULT_AI_SETTINGS = {
-  provider: 'kimi',
-  apiKey: '',
-  customBaseUrl: '',
-  customModel: '',
-  shortcutKey: 'CmdOrCtrl+Shift+A',
+  provider: PRESET.provider || 'kimi',
+  apiKey: PRESET.apiKey || '',
+  customBaseUrl: PRESET.customBaseUrl || '',
+  customModel: PRESET.customModel || '',
+  shortcutKey: PRESET.shortcutKey || 'CmdOrCtrl+Shift+A',
 };
 
 export const SCREENSHOT_PROMPT = `请分析这张截图，提取待办事项。如果是聊天/邮件/文档：
