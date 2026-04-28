@@ -1,6 +1,6 @@
 {
   "name": "desktop-secretary",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "A glassmorphism desktop assistant pinned to the right side of your screen",
   "main": "main.js",
   "scripts": {
