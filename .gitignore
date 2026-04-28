@@ -3,7 +3,6 @@ node_modules/
 dist/
 *.log
 config/publish-config.json
-src/ai-preset.js
 
 release/
 
