@@ -1,0 +1,27 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "npm",
+      "script": "dev",
+      "label": "▶ 启动预览",
+      "detail": "npm run dev（Vite + Electron）",
+      "isBackground": true,
+      "problemMatcher": {
+        "pattern": { "regexp": "." },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "> desktop-secretary",
+          "endsPattern": "Window loaded successfully"
+        }
+      },
+      "options": {
+        "env": { "ELECTRON_RUN_AS_NODE": "" }
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    }
+  ]
+}

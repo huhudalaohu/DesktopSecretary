@@ -142,7 +142,6 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
     getScreenInfo: () => resolve([]),
     getFrontWindows: () => resolve([]),
     showError: (title, content) => { alert(`${title}\n${content}`); return resolve(); },
-    showReminder: (title, detail) => { alert(`[提醒] ${title}\n${detail}`); return resolve(); },
     closeApp: () => { alert('关闭（浏览器预览模式下不可用）'); return resolve(); },
     resizeWindow: (w) => resolve(w),
     getWindowWidth: () => resolve(350),
@@ -172,7 +171,6 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
     onDockStateChanged: () => () => {},
     onDockSnapHint: () => () => {},
     onDockEdgeChanged: () => () => {},
-    onReminderTriggered: () => () => {},
     getAutoLaunch: () => resolve(false),
     setAutoLaunch: () => resolve({ success: true }),
 

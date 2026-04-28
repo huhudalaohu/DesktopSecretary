@@ -57,7 +57,6 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   showError: (title, content) => ipcRenderer.invoke('show-error', title, content),
 
   /** 弹出待办提醒对话框 */
-  showReminder: (title, detail) => ipcRenderer.invoke('show-reminder', title, detail),
 
   /** 关闭应用 */
   closeApp: () => ipcRenderer.invoke('close-app'),
@@ -302,13 +301,6 @@ contextBridge.exposeInMainWorld('desktopAPI', {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on('dock:edge-changed', handler);
     return () => ipcRenderer.removeListener('dock:edge-changed', handler);
-  },
-
-  /** 监听待办提醒触发 */
-  onReminderTriggered: (callback) => {
-    const handler = (_event, data) => callback(data);
-    ipcRenderer.on('reminder:triggered', handler);
-    return () => ipcRenderer.removeListener('reminder:triggered', handler);
   },
 
   // _appVersion 已废弃，版本号由 Vite 构建时通过 __APP_VERSION__ 注入

@@ -1,0 +1,39 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Vite Dev Server",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "env": {
+        "ELECTRON_RUN_AS_NODE": ""
+      },
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen"
+    },
+    {
+      "name": "Electron Main",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron",
+      "args": ["."],
+      "env": {
+        "NODE_ENV": "development",
+        "ELECTRON_RUN_AS_NODE": ""
+      },
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "sourceMaps": true
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Dev + Debug",
+      "configurations": ["Vite Dev Server"],
+      "preLaunchTask": "npm: dev",
+      "stopAll": true
+    }
+  ]
+}

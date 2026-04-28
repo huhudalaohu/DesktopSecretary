@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect, useRef } from 'react';
+
 import {
   Folder,
   LayoutGrid,
@@ -25,6 +26,54 @@ import {
 } from 'lucide-react';
 
 const api = window.desktopAPI;
+
+// ========== Tooltip 工具 ==========
+function useOverflowTooltip() {
+  const [tooltip, setTooltip] = useState({ show: false, text: '', x: 0, y: 0 });
+  const tooltipTimer = useRef(null);
+  const textRefs = useRef(new Map());
+
+  const bindRef = (id) => (el) => {
+    if (el) textRefs.current.set(id, el);
+  };
+
+  const handleEnter = (id, text) => (e) => {
+    const el = textRefs.current.get(id);
+    if (el && el.scrollWidth > el.clientWidth) {
+      if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
+      tooltipTimer.current = setTimeout(() => {
+        const rect = el.getBoundingClientRect();
+        setTooltip({
+          show: true,
+          text,
+          x: rect.left + rect.width / 2,
+          y: rect.top - 4,
+        });
+      }, 300);
+    }
+  };
+
+  const handleLeave = () => {
+    if (tooltipTimer.current) clearTimeout(tooltipTimer.current);
+    setTooltip((prev) => ({ ...prev, show: false }));
+  };
+
+  const TooltipNode = tooltip.show ? (
+    <div
+      className="fixed z-50 px-2 py-1 text-[12px] font-normal text-[#333] bg-white border border-[#E5E5E5] rounded-md shadow-lg pointer-events-none whitespace-nowrap"
+      style={{
+        left: tooltip.x,
+        top: tooltip.y,
+        transform: 'translate(-50%, -100%)',
+      }}
+    >
+      {tooltip.text}
+      <div className="absolute left-1/2 top-full -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-white" />
+    </div>
+  ) : null;
+
+  return { bindRef, handleEnter, handleLeave, TooltipNode };
+}
 
 function getFileKind(path) {
   const last = path.replace(/\\/g, '/').split('/').pop() || '';
@@ -85,6 +134,8 @@ export default function FileNavigator({ activeWorkspace }) {
   const [draggingIndex, setDraggingIndex] = useState(null);
   const [dragOverIndex, setDragOverIndex] = useState(null);
   const dragSourceIndexRef = useRef(null);
+
+  const tooltip = useOverflowTooltip();
 
   // 加载数据 + 一次性迁移旧数据
   useEffect(() => {
@@ -304,7 +355,12 @@ export default function FileNavigator({ activeWorkspace }) {
                   <div className="absolute -left-1 top-2 bottom-2 w-0.5 bg-blue-500 rounded-full shadow-[0_0_10px_rgba(59,130,246,1)] z-10 pointer-events-none" />
                 )}
                 <FileTypeIcon path={item.path} size={24} />
-                <span className="text-[14px] font-normal text-[#333] truncate w-full text-center">
+                <span
+                  ref={tooltip.bindRef(item.id)}
+                  onMouseEnter={tooltip.handleEnter(item.id, item.name)}
+                  onMouseLeave={tooltip.handleLeave}
+                  className="text-[14px] font-normal text-[#333] truncate w-full text-center"
+                >
                   {item.name}
                 </span>
               </div>
@@ -347,8 +403,14 @@ export default function FileNavigator({ activeWorkspace }) {
                   <div className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 bg-blue-500 rounded-full shadow-[0_0_10px_rgba(59,130,246,1)] z-10 pointer-events-none" />
                 )}
                 <FileTypeIcon path={item.path} size={18} />
-                <span className="text-[14px] font-normal text-[#333] truncate w-24 flex-shrink-0">{item.name}</span>
-                <span className="text-[12px] font-normal text-[#999] truncate flex-1 min-w-0">{truncatePath(item.path)}</span>
+                <span
+                  ref={tooltip.bindRef(item.id)}
+                  onMouseEnter={tooltip.handleEnter(item.id, item.name)}
+                  onMouseLeave={tooltip.handleLeave}
+                  className="text-[14px] font-normal text-[#333] truncate flex-1 min-w-0"
+                >
+                  {item.name}
+                </span>
               </div>
             ))}
             {/* 末尾插入区 */}
@@ -365,6 +427,8 @@ export default function FileNavigator({ activeWorkspace }) {
           </div>
         )}
       </div>
+
+      {tooltip.TooltipNode}
 
       {/* 右键菜单 */}
       {contextMenu && (

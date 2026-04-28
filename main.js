@@ -22,7 +22,6 @@
  */
 
 const { app, BrowserWindow, screen, ipcMain, shell, desktopCapturer, dialog, globalShortcut, safeStorage } = require('electron');
-const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
@@ -140,69 +139,11 @@ let lastHandleWindowMovedTime = 0; // 防止 moved / debounce 重复执行
 let registeredShortcut = null;
 let registeredPinShortcut = null;
 
-// 提醒通知轮询定时器
-let reminderCheckInterval = null;
-const REMINDER_CHECK_MS = 60 * 1000; // 每分钟检查一次
-const REMINDER_COOLDOWN_MS = 5 * 60 * 1000; // 同一待办 5 分钟内不重复提醒
-
 // fetchRenderedTitle 并发锁，防止同时创建多个 offscreen 窗口
 let renderedTitleLock = false;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * 检查待办提醒：每分钟轮询一次，找到到期的未触发提醒并弹出对话框
- */
-function checkReminders() {
-  if (!store || !mainWindow || mainWindow.isDestroyed()) return;
-  try {
-    const todos = store.get('todosGlobal', []);
-    if (!Array.isArray(todos) || todos.length === 0) return;
-    const now = Date.now();
-    const dueTodos = todos.filter(
-      (t) => !t.done && t.reminderTime && t.reminderTime <= now && !t.reminderTriggered
-    );
-    if (dueTodos.length === 0) return;
-    // 只提醒第一个，避免同时弹出多个对话框
-    const todo = dueTodos[0];
-    // 标记已触发并保存
-    const updated = todos.map((t) =>
-      t.id === todo.id ? { ...t, reminderTriggered: true } : t
-    );
-    store.set('todosGlobal', updated);
-    // 通知前端刷新
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('reminder:triggered', { todoId: todo.id });
-    }
-    // 弹出系统通知（优先使用系统通知，降级到对话框）
-    if (Notification.isSupported()) {
-      const notif = new Notification({
-        title: '待办提醒',
-        body: todo.text || '有待办事项到期',
-        silent: false,
-      });
-      notif.show();
-    } else {
-      dialog.showMessageBox(mainWindow, {
-        type: 'info',
-        title: '待办提醒',
-        message: '待办事项到期',
-        detail: todo.text || '',
-        buttons: ['知道了'],
-      });
-    }
-  } catch (err) {
-    console.error('[Reminder] 检查提醒失败:', err.message);
-  }
-}
-
-function startReminderPolling() {
-  if (reminderCheckInterval) clearInterval(reminderCheckInterval);
-  checkReminders(); // 启动时立即检查一次
-  reminderCheckInterval = setInterval(checkReminders, REMINDER_CHECK_MS);
-  console.log('[Reminder] 提醒轮询已启动，间隔', REMINDER_CHECK_MS, 'ms');
 }
 
 function getRendererUrl(routePath = '/') {
@@ -1240,19 +1181,6 @@ function registerIpcHandlers() {
     if (engine) {
       engine.onStoreChanged(key);
     }
-  });
-
-  /** show-reminder — 弹出待办提醒对话框 */
-  ipcMain.handle('show-reminder', async (_event, title, detail) => {
-    if (!mainWindow) return;
-    const result = await dialog.showMessageBox(mainWindow, {
-      type: 'info',
-      title: '待办提醒',
-      message: title || '待办事项到期',
-      detail: detail || '',
-      buttons: ['知道了'],
-    });
-    return result;
   });
 
   /** open-folder — 打开系统文件夹并记录到最近访问 */
@@ -2619,6 +2547,7 @@ app.whenReady().then(async () => {
     console.log('createWindow() completed, window count:', BrowserWindow.getAllWindows().length);
 
     // ========== electron-updater 自动更新事件监听 ==========
+    const { autoUpdater } = require('electron-updater');
     autoUpdater.on('checking-for-update', () => {
       console.log('[AutoUpdate] 正在检查更新...');
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -2762,9 +2691,6 @@ app.whenReady().then(async () => {
         }
       });
     }
-
-    // 启动待办提醒轮询
-    startReminderPolling();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

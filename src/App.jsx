@@ -5,6 +5,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import WorkspaceSwitcher from './components/WorkspaceSwitcher';
 import FileNavigator from './components/FileNavigator';
+import QuickNote from './components/QuickNote';
 import TodoList from './components/TodoList';
 import AIAssistant from './components/AIAssistant';
 import QuickLinks from './components/QuickLinks';
@@ -898,6 +899,7 @@ export default function App() {
       <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-6">
         <QuickLinks activeWorkspace={activeWorkspace} />
         <FileNavigator activeWorkspace={activeWorkspace} />
+        <QuickNote />
         <AIAssistant
           settings={aiSettings}
           screenshot={screenshot}
