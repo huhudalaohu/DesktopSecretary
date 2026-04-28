@@ -5,10 +5,12 @@ on:
     branches: [master, main]
   pull_request:
     branches: [master, main]
+  workflow_dispatch:   # 手动触发：构建 + 上传 COS
 
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -35,7 +37,23 @@ jobs:
 
       - name: Build Electron (macOS)
         if: matrix.os == 'macos-latest'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npx electron-builder --mac --publish=never
+
+      - name: Publish to COS (Windows)
+        if: matrix.os == 'windows-latest' && github.event_name == 'workflow_dispatch'
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+        run: node publish.js --platform=win
+
+      - name: Publish to COS (macOS)
+        if: matrix.os == 'macos-latest' && github.event_name == 'workflow_dispatch'
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+        run: node publish.js --platform=mac
 
       - name: Upload Windows artifacts
         if: matrix.os == 'windows-latest'

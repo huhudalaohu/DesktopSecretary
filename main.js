@@ -21,7 +21,7 @@
  *   - unregister-shortcut  — 注销全局快捷键
  */
 
-const { app, BrowserWindow, screen, ipcMain, shell, desktopCapturer, dialog, globalShortcut, safeStorage } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, shell, desktopCapturer, dialog, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const https = require('https');
@@ -245,118 +245,37 @@ async function initStore() {
   });
 }
 
-// ========== API Key 加密存储 ==========
-
-let safeStorageAvailable = false;
+// ========== API Key 存储（明文） ==========
 
 /**
- * 初始化 safeStorage 可用性检测（在 app.whenReady 后调用）
- * 不仅依赖 isEncryptionAvailable()，还做一轮实际加解密测试，
- * 避免某些 macOS 环境（如未签名应用、钥匙串权限受限）下反复报错。
- */
-function initSafeStorage() {
-  try {
-    if (!safeStorage.isEncryptionAvailable()) {
-      safeStorageAvailable = false;
-      console.warn('[SafeStorage] isEncryptionAvailable() 返回 false，使用明文存储');
-      return;
-    }
-    const testData = 'test-' + Date.now();
-    const encrypted = safeStorage.encryptString(testData);
-    const decrypted = safeStorage.decryptString(encrypted);
-    safeStorageAvailable = decrypted === testData;
-    if (!safeStorageAvailable) {
-      console.warn('[SafeStorage] 加解密测试不一致，使用明文存储');
-    }
-  } catch (err) {
-    safeStorageAvailable = false;
-    console.warn('[SafeStorage] 初始化测试失败，将使用明文存储:', err.message);
-  }
-}
-
-/**
- * 加密 aiSettings 中的 apiKey（使用操作系统级加密，如 Windows DPAPI）
- * 加密后的数据以 base64 形式存入 apiKeyEncrypted，并删除明文 apiKey
+ * aiSettings 透传，明文存储不做任何处理
  */
 function encryptAiSettings(settings) {
-  if (!settings || typeof settings !== 'object') return settings;
-  if (!settings.apiKey) {
-    // 没有明文 key，直接返回（可能已经是加密形态）
-    return settings;
-  }
-  try {
-    if (!safeStorageAvailable) {
-      console.warn('[Encrypt] safeStorage 不可用，继续使用明文存储');
-      return settings;
-    }
-    const encrypted = safeStorage.encryptString(settings.apiKey);
-    const result = { ...settings };
-    result.apiKeyEncrypted = encrypted.toString('base64');
-    delete result.apiKey;
-    return result;
-  } catch (err) {
-    console.error('[Encrypt] API Key 加密失败:', err);
-    return settings;
-  }
+  return settings;
 }
 
 /**
- * 解密 aiSettings 中的 apiKey
- * 如果存在明文 apiKey（旧数据），直接返回并触发迁移
+ * aiSettings 透传，兼容旧版 apiKeyEncrypted 字段（直接忽略）
  */
 function decryptAiSettings(settings) {
   if (!settings || typeof settings !== 'object') return settings;
-  // 旧版兼容：存在明文 apiKey
-  if (settings.apiKey) return settings;
-  if (!settings.apiKeyEncrypted) return settings;
-  try {
-    if (!safeStorageAvailable) {
-      console.warn('[Decrypt] safeStorage 不可用，无法解密 API Key');
-      return settings;
-    }
-    const encrypted = Buffer.from(settings.apiKeyEncrypted, 'base64');
-    const apiKey = safeStorage.decryptString(encrypted);
+  // 旧版兼容：忽略加密字段，当作明文返回
+  if (settings.apiKeyEncrypted) {
     const result = { ...settings };
-    result.apiKey = apiKey;
     delete result.apiKeyEncrypted;
     return result;
-  } catch (err) {
-    console.error('[Decrypt] API Key 解密失败:', err);
-    return settings;
   }
+  return settings;
 }
 
 /**
- * 安全的 store 写入，自动对 aiSettings 中的 apiKey 加密
+ * store 写入，对 aiSettings 做明文透传
  */
 function safeStoreSet(key, value) {
   if (key === 'aiSettings') {
     value = encryptAiSettings(value);
   }
   store.set(key, value);
-}
-
-/**
- * 将旧版明文 apiKey 迁移为加密存储
- */
-async function migrateApiKeyEncryption() {
-  try {
-    if (!safeStorage.isEncryptionAvailable()) {
-      console.warn('[Migrate] safeStorage 不可用，跳过加密迁移');
-      return;
-    }
-    const settings = store.get('aiSettings', {});
-    if (settings && settings.apiKey && settings.apiKey.length > 0 && !settings.apiKeyEncrypted) {
-      const encrypted = safeStorage.encryptString(settings.apiKey);
-      const migrated = { ...settings };
-      migrated.apiKeyEncrypted = encrypted.toString('base64');
-      delete migrated.apiKey;
-      store.set('aiSettings', migrated);
-      console.log('[Migrate] API Key 已迁移为操作系统级加密存储');
-    }
-  } catch (err) {
-    console.error('[Migrate] API Key 加密迁移失败:', err);
-  }
 }
 
 /**
@@ -2540,14 +2459,21 @@ app.whenReady().then(async () => {
     platform.windowOptions.applyAppLevelPlatformSetup(app);
     await initStore();
     initSync(store, tcbApp);
-    initSafeStorage();
-    await migrateApiKeyEncryption();
     registerIpcHandlers();
     await createWindow();
     console.log('createWindow() completed, window count:', BrowserWindow.getAllWindows().length);
 
     // ========== electron-updater 自动更新事件监听 ==========
     const { autoUpdater } = require('electron-updater');
+
+    // 按平台设置更新源：Win → updates/win/latest.yml，Mac → updates/mac/latest-mac.yml
+    const platformDir = process.platform === 'darwin' ? 'mac' : 'win';
+    autoUpdater.setFeedURL({
+      provider: 'generic',
+      url: `https://ds-update-1420931574.cos.ap-guangzhou.myqcloud.com/updates/${platformDir}`,
+    });
+    console.log(`[AutoUpdate] 更新源已设置: /updates/${platformDir}/`);
+
     autoUpdater.on('checking-for-update', () => {
       console.log('[AutoUpdate] 正在检查更新...');
       if (mainWindow && !mainWindow.isDestroyed()) {

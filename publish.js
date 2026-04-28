@@ -1,15 +1,25 @@
 /**
- * DesktopSecretary — 发布脚本（electron-updater 版）
+ * DesktopSecretary — 发布脚本（支持 Windows / macOS 双平台）
  *
  * COS 目录结构：
  *   cos://{bucket}/
- *     ├── update.json              ← 兼容旧客户端的更新检查入口
- *     └── updates/
- *         ├── latest.yml           ← electron-updater 读取
- *         ├── DesktopSecretary Setup 1.0.6.exe
- *         ├── DesktopSecretary Setup 1.0.6.exe.blockmap
- *         └── 1.0.5/               ← 旧版本归档
- *             └── DesktopSecretary Setup 1.0.5.exe
+ *     ├── updates/
+ *     │   ├── win/
+ *     │   │   ├── latest.yml
+ *     │   │   ├── DesktopSecretary-1.0.8-win-x64.exe
+ *     │   │   └── DesktopSecretary-1.0.8-win-x64.exe.blockmap
+ *     │   ├── mac/
+ *     │   │   ├── latest-mac.yml
+ *     │   │   ├── DesktopSecretary-1.0.8-mac-arm64.dmg
+ *     │   │   ├── DesktopSecretary-1.0.8-mac-x64.dmg
+ *     │   │   ├── DesktopSecretary-1.0.8-mac-arm64.zip
+ *     │   │   └── DesktopSecretary-1.0.8-mac-x64.zip
+ *     │   └── 1.0.8/               ← 旧版本归档（win + mac 混合）
+ *     └── update.json              ← 兼容旧 Windows 客户端的更新检查入口
+ *
+ * 用法：
+ *   node publish.js --platform=win    (默认)
+ *   node publish.js --platform=mac
  */
 
 const fs = require('fs');
@@ -20,6 +30,11 @@ const COS = require('cos-nodejs-sdk-v5');
 const BUCKET = 'ds-update-1420931574';
 const REGION = 'ap-guangzhou';
 const BASE_URL = `https://${BUCKET}.cos.${REGION}.myqcloud.com`;
+
+// ========== 解析命令行参数 ==========
+const platform = process.argv.includes('--platform=mac') ? 'mac' : 'win';
+const isMac = platform === 'mac';
+const isWin = platform === 'win';
 
 // ========== 读取 package.json 版本号 ==========
 const pkgPath = path.join(__dirname, 'package.json');
@@ -105,76 +120,86 @@ function getReleaseNotes(ver) {
 
 // ========== 主流程 ==========
 async function main() {
-  console.log(`[Publish] 开始发布，版本: ${version}`);
+  console.log(`[Publish] 开始发布，平台: ${platform.toUpperCase()}，版本: ${version}`);
 
   // 读取密钥
   const { secretId, secretKey } = getCredentials();
   const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
 
-  // 扫描本地文件（按版本号精确匹配，防止多版本共存时扫错）
   const files = fs.readdirSync(distPath);
-  const installer = files.find((f) => f.endsWith('.exe') && !f.endsWith('.blockmap') && f.includes(version));
-  const blockmap = files.find((f) => f.endsWith('.exe.blockmap') && f.includes(version));
-  const latestYml = files.find((f) => f === 'latest.yml');
+  const uploadList = [];
 
-  if (!installer) {
-    throw new Error(`在 ${distPath} 下未找到 .exe 安装包`);
+  if (isWin) {
+    // Windows: .exe + .blockmap + latest.yml
+    const installer = files.find((f) => f.endsWith('.exe') && !f.endsWith('.blockmap') && f.includes(version));
+    const blockmap = files.find((f) => f.endsWith('.exe.blockmap') && f.includes(version));
+    const latestYml = files.find((f) => f === 'latest.yml');
+
+    if (!installer) throw new Error(`在 ${distPath} 下未找到 .exe 安装包`);
+    if (!latestYml) throw new Error(`在 ${distPath} 下未找到 latest.yml`);
+
+    uploadList.push({ local: path.join(distPath, installer), remote: `updates/win/${installer}` });
+    if (blockmap) uploadList.push({ local: path.join(distPath, blockmap), remote: `updates/win/${blockmap}` });
+    uploadList.push({ local: path.join(distPath, latestYml), remote: 'updates/win/latest.yml' });
+
+    // 归档
+    uploadList.push({ local: path.join(distPath, installer), remote: `updates/${version}/${installer}` });
+
+    // 生成并上传 update.json（兼容旧客户端）
+    const releaseNotes = getReleaseNotes(version) || `DesktopSecretary ${version} 已发布`;
+    const updateJson = {
+      hasUpdate: true,
+      version: version,
+      latestVersion: version,
+      message: releaseNotes,
+      downloadUrl: `${BASE_URL}/updates/win/${installer}`,
+    };
+    const updateJsonPath = path.join(distPath, 'update.json');
+    fs.writeFileSync(updateJsonPath, JSON.stringify(updateJson, null, 2), 'utf8');
+    uploadList.push({ local: updateJsonPath, remote: 'update.json' });
   }
-  if (!latestYml) {
-    throw new Error(`在 ${distPath} 下未找到 latest.yml，请先确认 package.json 中配置了 publish`);
-  }
 
-  const installerPath = path.join(distPath, installer);
-  const blockmapPath = blockmap ? path.join(distPath, blockmap) : null;
-  const latestYmlPath = path.join(distPath, latestYml);
+  if (isMac) {
+    // macOS: .dmg + .zip + latest-mac.yml
+    const dmgs = files.filter((f) => f.endsWith('.dmg') && f.includes(version));
+    const zips = files.filter((f) => f.endsWith('.zip') && f.includes(version) && !f.endsWith('.blockmap'));
+    const latestMacYml = files.find((f) => f === 'latest-mac.yml');
 
-  // 1. 上传最新版本到 updates/ 根目录（electron-updater 读取）
-  console.log(`[Publish] 上传安装包到 updates/: ${installer}`);
-  await uploadFile(cos, `updates/${installer}`, installerPath);
+    if (dmgs.length === 0) throw new Error(`在 ${distPath} 下未找到 .dmg 安装包`);
+    if (!latestMacYml) throw new Error(`在 ${distPath} 下未找到 latest-mac.yml`);
 
-  if (blockmapPath) {
-    console.log(`[Publish] 上传 blockmap 到 updates/: ${blockmap}`);
-    await uploadFile(cos, `updates/${blockmap}`, blockmapPath);
-  }
+    for (const f of dmgs) {
+      uploadList.push({ local: path.join(distPath, f), remote: `updates/mac/${f}` });
+    }
+    for (const f of zips) {
+      uploadList.push({ local: path.join(distPath, f), remote: `updates/mac/${f}` });
+    }
+    uploadList.push({ local: path.join(distPath, latestMacYml), remote: 'updates/mac/latest-mac.yml' });
 
-  console.log('[Publish] 上传 latest.yml 到 updates/latest.yml');
-  await uploadFile(cos, 'updates/latest.yml', latestYmlPath);
-
-  // 2. 归档到 updates/{version}/（保留历史版本）
-  console.log(`[Publish] 归档到 updates/${version}/`);
-  await uploadFile(cos, `updates/${version}/${installer}`, installerPath);
-
-  // 3. 生成并上传根目录 update.json（兼容旧客户端）
-  const releaseNotes = getReleaseNotes(version) || `DesktopSecretary ${version} 已发布`;
-  const updateJson = {
-    hasUpdate: true,
-    version: version,
-    latestVersion: version,
-    message: releaseNotes,
-    downloadUrl: `${BASE_URL}/updates/${installer}`,
-  };
-  const updateJsonPath = path.join(distPath, 'update.json');
-  fs.writeFileSync(updateJsonPath, JSON.stringify(updateJson, null, 2), 'utf8');
-  console.log('[Publish] 上传 update.json');
-  await uploadFile(cos, 'update.json', updateJsonPath);
-
-  // 4. 清理 COS 上我之前错误创建的文件
-  console.log('[Publish] 清理旧体系残留...');
-  const trashKeys = ['manifest.json', 'latest/manifest.json'];
-  for (const key of trashKeys) {
-    try {
-      await deleteCosObject(cos, key);
-      console.log(`[Publish] ✓ 已删除 ${key}`);
-    } catch {
-      // 可能已不存在，忽略
+    // 归档
+    for (const f of dmgs) {
+      uploadList.push({ local: path.join(distPath, f), remote: `updates/${version}/${f}` });
+    }
+    for (const f of zips) {
+      uploadList.push({ local: path.join(distPath, f), remote: `updates/${version}/${f}` });
     }
   }
 
+  // 执行上传
+  for (const item of uploadList) {
+    console.log(`[Publish] 上传: ${item.remote}`);
+    await uploadFile(cos, item.remote, item.local);
+  }
+
   console.log('');
-  console.log(`[Publish] 发布完成！版本: ${version}`);
-  console.log(`[Publish] 更新检查 (electron-updater): ${BASE_URL}/updates/latest.yml`);
-  console.log(`[Publish] 更新检查 (旧客户端兼容): ${BASE_URL}/update.json`);
-  console.log(`[Publish] 安装包: ${BASE_URL}/updates/${installer}`);
+  console.log(`[Publish] 发布完成！平台: ${platform.toUpperCase()}，版本: ${version}`);
+  if (isWin) {
+    console.log(`[Publish] Windows 更新检查: ${BASE_URL}/updates/win/latest.yml`);
+    console.log(`[Publish] 旧客户端兼容: ${BASE_URL}/update.json`);
+  }
+  if (isMac) {
+    console.log(`[Publish] macOS 更新检查: ${BASE_URL}/updates/mac/latest-mac.yml`);
+  }
 }
 
 main().catch((err) => {
