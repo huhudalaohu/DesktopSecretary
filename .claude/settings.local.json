@@ -28,7 +28,13 @@
       "WebSearch",
       "Bash(wmic process *)",
       "Bash(tasklist /fi \"imagename eq electron*\")",
-      "Bash(echo \"VITE_PID=$!\")"
+      "Bash(echo \"VITE_PID=$!\")",
+      "Bash(echo \"SKILL_ADD_EXIT:$?\")",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:cdn.jsdelivr.net)",
+      "Bash(curl -sL --max-time 30 \"https://ghproxy.com/https://raw.githubusercontent.com/anthropics/skills/main/frontend-design/skill.yaml\")",
+      "Bash(curl -sL --max-time 30 \"https://mirror.ghproxy.com/https://raw.githubusercontent.com/anthropics/skills/main/pdf/skill.yaml\")",
+      "Bash(curl -sL --max-time 30 \"https://api.github.com/repos/anthropics/skills/contents/frontend-design/skill.yaml\")"
     ]
   }
 }
