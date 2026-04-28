@@ -16,6 +16,7 @@ export default defineConfig({
   build: {
     outDir: 'dist',         // 构建输出目录
     emptyOutDir: true,
+    target: 'es2022',       // 支持顶层 await（ai-config.js 动态导入预设）
   },
   resolve: {
     alias: {
