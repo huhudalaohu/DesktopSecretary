@@ -28,6 +28,11 @@ const os = require('os');
 const { spawn } = require('child_process');
 const platform = require('./main/platform');
 const { initSync, getAuth, getEngine } = require('./main/sync');
+const { sleep } = require('./main/utils/common');
+const { cleanupLinkCache, fetchPage, fetchRenderedTitle } = require('./main/utils/link-preview');
+const { registerDataIpcHandlers } = require('./main/ipc/data');
+const { registerSyncIpcHandlers } = require('./main/ipc/sync');
+const { registerUpdaterIpcHandlers } = require('./main/ipc/updater');
 
 // 开发模式下加载 .env 文件；生产环境 asar 中不含 dotenv，依赖系统环境变量或构建注入
 try {
@@ -51,7 +56,7 @@ if (!TCB_SECRET_ID || !TCB_SECRET_KEY) {
       const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       TCB_SECRET_ID = config.secretId;
       TCB_SECRET_KEY = config.secretKey;
-      console.log('[CloudBase] 使用配置文件凭证');
+      // 凭证来源日志已移除（安全原因）
     }
   } catch (err) {
     console.warn('[CloudBase] 读取配置文件失败:', err.message);
@@ -136,12 +141,8 @@ let lastHandleWindowMovedTime = 0; // 防止 moved / debounce 重复执行
 let registeredShortcut = null;
 let registeredPinShortcut = null;
 
-// fetchRenderedTitle 并发锁，防止同时创建多个 offscreen 窗口
-let renderedTitleLock = false;
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// 截图 ready 事件处理器引用（用于精准移除监听器，避免误删）
+let screenshotReadyHandler = null;
 
 function getRendererUrl(routePath = '/') {
   return new URL(routePath, `${DEV_SERVER_URL}/`).toString();
@@ -242,26 +243,59 @@ async function initStore() {
   });
 }
 
-// ========== API Key 存储（明文） ==========
+// ========== API Key 存储（使用系统 safeStorage 加密） ==========
+
+const { safeStorage } = require('electron');
 
 /**
- * aiSettings 透传，明文存储不做任何处理
+ * 使用 safeStorage 加密 apiKey
+ * 加密后的数据以 base64 字符串存储在 apiKeyEncrypted 字段中
+ * 明文 apiKey 字段会被清空，避免泄露
  */
 function encryptAiSettings(settings) {
-  return settings;
+  if (!settings || typeof settings !== 'object') return settings;
+  if (!settings.apiKey) return settings;
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      console.warn('[safeStorage] 系统加密不可用，使用明文存储（fallback）');
+      return settings;
+    }
+    const encrypted = safeStorage.encryptString(settings.apiKey);
+    return {
+      ...settings,
+      apiKey: '',
+      apiKeyEncrypted: encrypted.toString('base64'),
+    };
+  } catch (err) {
+    console.error('[safeStorage] 加密失败，使用明文存储（fallback）:', err.message);
+    return settings;
+  }
 }
 
 /**
- * aiSettings 透传，兼容旧版 apiKeyEncrypted 字段（直接忽略）
+ * 使用 safeStorage 解密 apiKey
+ * 兼容旧版明文数据（无 apiKeyEncrypted 字段时直接返回）
  */
 function decryptAiSettings(settings) {
   if (!settings || typeof settings !== 'object') return settings;
-  // 旧版兼容：忽略加密字段，当作明文返回
+  // 优先解密新格式
   if (settings.apiKeyEncrypted) {
-    const result = { ...settings };
-    delete result.apiKeyEncrypted;
-    return result;
+    try {
+      if (!safeStorage.isEncryptionAvailable()) {
+        console.warn('[safeStorage] 系统加密不可用，无法解密 apiKey');
+        return settings;
+      }
+      const encrypted = Buffer.from(settings.apiKeyEncrypted, 'base64');
+      const decrypted = safeStorage.decryptString(encrypted);
+      const result = { ...settings, apiKey: decrypted };
+      delete result.apiKeyEncrypted;
+      return result;
+    } catch (err) {
+      console.error('[safeStorage] 解密失败，返回原数据:', err.message);
+      return settings;
+    }
   }
+  // 旧版明文兼容：直接返回
   return settings;
 }
 
@@ -379,7 +413,7 @@ function expandDock(reason) {
   mainWindow.setIgnoreMouseEvents(false);
   positionDockWindow(true);
   mainWindow.show();
-  console.log('[Window] shown, bounds=', mainWindow.getBounds(), 'dockedEdge=', dockedEdge, 'dockExpanded=', dockExpanded);
+  if (!app.isPackaged) console.log('[Window] shown, bounds=', mainWindow.getBounds(), 'dockedEdge=', dockedEdge, 'dockExpanded=', dockExpanded);
   mainWindow.focus();
 
   dockGraceTimer = setTimeout(() => { dockGraceTimer = null; }, DOCK_GRACE_PERIOD);
@@ -480,7 +514,7 @@ function startDockMouseTracking() {
         collapseDock('鼠标离开');
       }
     }
-  }, 80);
+  }, 120);
 }
 
 /**
@@ -558,7 +592,7 @@ async function createWindow() {
     },
   }));
   platform.windowOptions.applyMainWindowPlatformSetup(mainWindow);
-  console.log('[Window] created, initialBounds=', { x: initialX, y: initialY, width: initialW, height: initialH }, 'dockedEdge=', dockedEdge);
+  if (!app.isPackaged) console.log('[Window] created, initialBounds=', { x: initialX, y: initialY, width: initialW, height: initialH }, 'dockedEdge=', dockedEdge);
 
   // 开发模式加载 Vite dev server（支持热更新），生产模式加载 build 产物
   const indexFile = path.join(__dirname, 'dist', 'index.html');
@@ -874,7 +908,13 @@ function destroyOverlay() {
  *   4. 前台窗口检测用异步 exec → 不阻塞主进程事件循环
  */
 function startScreenshotOverlay() {
-  return new Promise(async (resolve) => {
+  // 防止重复触发截图流程
+  if (overlayActive) {
+    console.log('[Screenshot] 已有截图流程进行中，忽略重复触发');
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    (async () => {
     const t0 = Date.now();
     screenshotResolve = resolve;
 
@@ -903,7 +943,7 @@ function startScreenshotOverlay() {
       if (dockExpandTimer) { clearTimeout(dockExpandTimer); dockExpandTimer = null; }
       if (dockHideTimer) { clearTimeout(dockHideTimer); dockHideTimer = null; }
 
-      console.log('[Window] hide triggered at:', new Error().stack);
+      // hide 触发日志已移除（避免栈信息泄露路径）
       mainWindow.hide();
 
       // Windows DWM 有 compositing 延迟，hide() 后窗口不会立即从屏幕上消失。
@@ -939,8 +979,11 @@ function startScreenshotOverlay() {
     const t1 = Date.now();
     console.log(`[Screenshot] 截屏+窗口准备完成: ${t1 - t0}ms`);
 
-    // 3. 清空 ready 监听，准备收集每块屏的 ready 信号
-    ipcMain.removeAllListeners('screenshot:ready');
+    // 3. 清理上一次可能残留的 ready 监听器
+    if (screenshotReadyHandler) {
+      ipcMain.removeListener('screenshot:ready', screenshotReadyHandler);
+      screenshotReadyHandler = null;
+    }
 
     // 4. 每块屏推一张 PNG Buffer 到对应 overlay
     const pendingOverlays = [];
@@ -1004,18 +1047,24 @@ function startScreenshotOverlay() {
       let remaining = pendingOverlays.length;
       const readyTimeout = setTimeout(() => {
         console.log(`[Screenshot] overlay ready 超时(剩 ${remaining})，强制显示`);
-        ipcMain.removeListener('screenshot:ready', onReady);
+        if (screenshotReadyHandler) {
+          ipcMain.removeListener('screenshot:ready', screenshotReadyHandler);
+          screenshotReadyHandler = null;
+        }
         readyResolve();
       }, 500);
-      const onReady = () => {
+      screenshotReadyHandler = () => {
         remaining--;
         if (remaining <= 0) {
           clearTimeout(readyTimeout);
-          ipcMain.removeListener('screenshot:ready', onReady);
+          if (screenshotReadyHandler) {
+            ipcMain.removeListener('screenshot:ready', screenshotReadyHandler);
+            screenshotReadyHandler = null;
+          }
           readyResolve();
         }
       };
-      ipcMain.on('screenshot:ready', onReady);
+      ipcMain.on('screenshot:ready', screenshotReadyHandler);
     });
 
     // 6. 图片就绪，显示所有 overlay；焦点给光标所在那块屏
@@ -1050,31 +1099,11 @@ function startScreenshotOverlay() {
     }).catch((err) => {
       console.log('[Screenshot] 前台窗口检测失败（非关键）:', err.message);
     });
+  })();
   });
 }
 
 // ========== IPC 处理器 ==========
-
-/** 清理过期的 linkCache（网页元数据缓存，24h 过期） */
-function cleanupLinkCache() {
-  try {
-    const now = Date.now();
-    const allCache = store.get('linkCache', {});
-    let removed = 0;
-    for (const [key, entry] of Object.entries(allCache)) {
-      if (now - entry.timestamp > 24 * 60 * 60 * 1000) {
-        delete allCache[key];
-        removed++;
-      }
-    }
-    if (removed > 0) {
-      store.set('linkCache', allCache);
-      console.log(`[Cleanup] linkCache 清理完成，移除 ${removed} 条过期缓存`);
-    }
-  } catch (err) {
-    console.error('[Cleanup] linkCache 清理失败:', err);
-  }
-}
 
 function registerIpcHandlers() {
   /** store:get — 读取 electron-store 数据 */
@@ -1124,7 +1153,7 @@ function registerIpcHandlers() {
       const displays = screen.getAllDisplays();
       console.log('[Screenshot] 检测到显示器数量:', displays.length);
       displays.forEach((d, i) => {
-        console.log(`[Screenshot] 显示器${i}: id=${d.id}, bounds=${JSON.stringify(d.bounds)}, size=${d.size.width}x${d.size.height}, scaleFactor=${d.scaleFactor}`);
+        if (!app.isPackaged) console.log(`[Screenshot] 显示器${i}: id=${d.id}, bounds=${JSON.stringify(d.bounds)}, size=${d.size.width}x${d.size.height}, scaleFactor=${d.scaleFactor}`);
       });
 
       // 计算所有显示器中最大分辨率，确保截图覆盖完整
@@ -1338,7 +1367,7 @@ function registerIpcHandlers() {
       }
 
       // 顺便清理过期缓存（概率触发，避免每次请求都全量扫描）
-      if (Math.random() < 0.1) cleanupLinkCache();
+      if (Math.random() < 0.1) cleanupLinkCache(store);
 
       return result;
     } catch {
@@ -1361,294 +1390,6 @@ function registerIpcHandlers() {
     }
     return result;
   });
-
-  /**
-   * 抓取网页并解析 OG 元数据
-   * 返回 { title, favicon, description, source, error? }
-   */
-  function fetchPage(url) {
-    return new Promise((resolve) => {
-      const mod = url.startsWith('https') ? https : http;
-      let req = null;
-      const timeout = setTimeout(() => {
-        if (req) req.destroy();
-        resolve({ title: null, favicon: null, description: null, source: 'timeout', error: 'TIMEOUT' });
-      }, 3000);
-
-      req = mod.get(url, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-          'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6',
-          'Sec-Fetch-Dest': 'document',
-          'Sec-Fetch-Mode': 'navigate',
-          'Sec-Fetch-Site': 'none',
-          'Sec-Fetch-User': '?1',
-          'Upgrade-Insecure-Requests': '1',
-        },
-        timeout: 2000,
-      }, (res) => {
-        // 跟随重定向
-        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-          clearTimeout(timeout);
-          res.destroy();
-          const redirectUrl = new URL(res.headers.location, url).href;
-          fetchPage(redirectUrl).then(resolve);
-          return;
-        }
-
-        // 错误状态处理
-        if (res.statusCode === 401 || res.statusCode === 403) {
-          clearTimeout(timeout);
-          res.destroy();
-          resolve({ title: null, favicon: null, description: null, source: 'error', error: 'need_login' });
-          return;
-        }
-        if (res.statusCode === 404) {
-          clearTimeout(timeout);
-          res.destroy();
-          resolve({ title: null, favicon: null, description: null, source: 'error', error: 'not_found' });
-          return;
-        }
-        if (res.statusCode !== 200) {
-          clearTimeout(timeout);
-          res.destroy();
-          resolve({ title: null, favicon: null, description: null, source: 'error', error: `http_${res.statusCode}` });
-          return;
-        }
-
-        let data = '';
-        let received = 0;
-        let responseSettled = false;
-        function safeResolve(value) {
-          if (!responseSettled) {
-            responseSettled = true;
-            clearTimeout(timeout);
-            resolve(value);
-          }
-        }
-        res.on('data', (chunk) => {
-          received += chunk.length;
-          data += chunk.toString();
-          // 只读前 10KB，拿到 <head> 就够了
-          if (received > 10240) {
-            // 先解析并 resolve，再 destroy；否则 end 事件不会触发导致 Promise 挂起
-            safeResolve(parseMeta(data, url));
-            res.destroy();
-          }
-        });
-        res.on('end', () => {
-          // 反爬检测：HTML 太短且含验证码关键词
-          if (data.length < 500 && /验证|captcha|verify/i.test(data)) {
-            safeResolve({ title: null, favicon: null, description: null, source: 'error', error: 'captcha' });
-            return;
-          }
-          safeResolve(parseMeta(data, url));
-        });
-        res.on('error', () => {
-          safeResolve({ title: null, favicon: null, description: null, source: 'error' });
-        });
-        res.on('close', () => {
-          // 兜底：如果 data 事件里已 resolve，这里不会重复执行
-          safeResolve(parseMeta(data, url));
-        });
-      });
-      req.on('error', () => {
-        clearTimeout(timeout);
-        resolve({ title: null, favicon: null, description: null, source: 'error' });
-      });
-      req.on('timeout', () => {
-        req.destroy();
-        clearTimeout(timeout);
-        resolve({ title: null, favicon: null, description: null, source: 'error' });
-      });
-    });
-  }
-
-  /** 解析 HTML 中的 OG 元标签（增强版：支持微信、知乎、掘金等特殊结构） */
-  function parseMeta(html, baseUrl) {
-    // 优先级：og:title > twitter:title > 特殊站点规则 > <title>
-    let title = null;
-    let source = 'og-meta';
-
-    const ogTitle = html.match(/<meta[^>]*property\s*=\s*["']og:title["'][^>]*content\s*=\s*["']([^"']+)["']/i)
-      || html.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*property\s*=\s*["']og:title["']/i);
-    if (ogTitle) {
-      title = decodeHtml(ogTitle[1]);
-    }
-
-    if (!title) {
-      const twitterTitle = html.match(/<meta[^>]*name\s*=\s*["']twitter:title["'][^>]*content\s*=\s*["']([^"']+)["']/i)
-        || html.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*name\s*=\s*["']twitter:title["']/i);
-      if (twitterTitle) {
-        title = decodeHtml(twitterTitle[1]);
-      }
-    }
-
-    // 特殊站点规则（微信、知乎、掘金、CSDN 等）
-    if (!title) {
-      // 微信文章：rich_media_title / activity_name
-      const wxTitle = html.match(/<h2[^>]*class\s*=\s*["'][^"]*rich_media_title["'][^>]*>([\s\S]*?)<\/h2>/i)
-        || html.match(/<div[^>]*id\s*=\s*["']activity_name["'][^>]*>([\s\S]*?)<\/div>/i);
-      if (wxTitle) {
-        title = decodeHtml(wxTitle[1].replace(/<[^>]+>/g, '').trim());
-        source = 'og-meta';
-      }
-      // 知乎：Post-Title / h1.Title
-      if (!title) {
-        const zhTitle = html.match(/<h1[^>]*class\s*=\s*["'][^"]*Post-Title["'][^>]*>([\s\S]*?)<\/h1>/i)
-          || html.match(/<h1[^>]*class\s*=\s*["'][^"]*Title["'][^>]*>([\s\S]*?)<\/h1>/i);
-        if (zhTitle) {
-          title = decodeHtml(zhTitle[1].replace(/<[^>]+>/g, '').trim());
-          source = 'og-meta';
-        }
-      }
-      // 掘金：article-title
-      if (!title) {
-        const jjTitle = html.match(/<h1[^>]*class\s*=\s*["'][^"]*article-title["'][^>]*>([\s\S]*?)<\/h1>/i);
-        if (jjTitle) {
-          title = decodeHtml(jjTitle[1].replace(/<[^>]+>/g, '').trim());
-          source = 'og-meta';
-        }
-      }
-      // CSDN：title / article-title
-      if (!title) {
-        const csdnTitle = html.match(/<h1[^>]*class\s*=\s*["'][^"]*title-article["'][^>]*>([\s\S]*?)<\/h1>/i)
-          || html.match(/<span[^>]*class\s*=\s*["'][^"]*article-title["'][^>]*>([\s\S]*?)<\/span>/i);
-        if (csdnTitle) {
-          title = decodeHtml(csdnTitle[1].replace(/<[^>]+>/g, '').trim());
-          source = 'og-meta';
-        }
-      }
-    }
-
-    if (!title) {
-      const titleTag = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
-      if (titleTag && titleTag[1].trim()) {
-        title = decodeHtml(titleTag[1].trim());
-      }
-    }
-
-    // og:image
-    let favicon = null;
-    const ogImage = html.match(/<meta[^>]*property\s*=\s*["']og:image["'][^>]*content\s*=\s*["']([^"']+)["']/i)
-      || html.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*property\s*=\s*["']og:image["']/i);
-    if (ogImage) {
-      favicon = ogImage[1];
-    }
-
-    // <link rel="icon">
-    if (!favicon) {
-      const linkIcon = html.match(/<link[^>]*rel\s*=\s*["'](?:shortcut )?icon["'][^>]*href\s*=\s*["']([^"']+)["']/i);
-      if (linkIcon) {
-        favicon = new URL(linkIcon[1], baseUrl).href;
-      }
-    }
-
-    // og:description
-    let description = null;
-    const ogDesc = html.match(/<meta[^>]*property\s*=\s*["']og:description["'][^>]*content\s*=\s*["']([^"']+)["']/i)
-      || html.match(/<meta[^>]*content\s*=\s*["']([^"']+)["'][^>]*property\s*=\s*["']og:description["']/i);
-    if (ogDesc) {
-      description = decodeHtml(ogDesc[1]);
-    }
-
-    if (!title) source = 'error';
-    return { title, favicon, description, source };
-  }
-
-  /**
-   * 用 Electron 隐藏窗口渲染页面后提取标题（对付 CSR / 反爬站点）
-   * 流程：创建 offscreen BrowserWindow → loadURL → 等待 JS 执行 → executeJavaScript 提取标题
-   */
-  async function fetchRenderedTitle(targetUrl) {
-    // 并发锁：如果已有实例在执行，等待后重试（利用缓存降低重试频率）
-    if (renderedTitleLock) {
-      await sleep(500);
-      return fetchRenderedTitle(targetUrl);
-    }
-    renderedTitleLock = true;
-    return new Promise((resolve) => {
-      const win = new BrowserWindow({
-        show: false,
-        width: 1280,
-        height: 720,
-        webPreferences: {
-          offscreen: true,
-          nodeIntegration: false,
-          contextIsolation: true,
-          javascript: true,
-        },
-      });
-
-      const cleanup = (result) => {
-        clearTimeout(timeout);
-        try { win.destroy(); } catch {}
-        renderedTitleLock = false;
-        resolve(result);
-      };
-
-      const timeout = setTimeout(() => {
-        cleanup({ title: null, favicon: null, source: 'error' });
-      }, 8000);
-
-      win.webContents.on('did-finish-load', async () => {
-        // 再等 1.5s 让 SPA 完成 JS 渲染
-        await sleep(1500);
-        try {
-          const result = await win.webContents.executeJavaScript(`
-            (() => {
-              const og = document.querySelector('meta[property="og:title"]');
-              if (og && og.content) return { title: og.content.trim(), favicon: null };
-              const tw = document.querySelector('meta[name="twitter:title"]');
-              if (tw && tw.content) return { title: tw.content.trim(), favicon: null };
-              // 微信文章
-              const wx = document.querySelector('#activity_name, .rich_media_title');
-              if (wx) return { title: wx.textContent.trim(), favicon: null };
-              // 知乎
-              const zh = document.querySelector('.Post-Title, h1.Title');
-              if (zh) return { title: zh.textContent.trim(), favicon: null };
-              // 掘金
-              const jj = document.querySelector('h1.article-title');
-              if (jj) return { title: jj.textContent.trim(), favicon: null };
-              return { title: document.title.trim(), favicon: null };
-            })()
-          `);
-          if (result && result.title && result.title.length > 0 && result.title !== 'about:blank') {
-            cleanup({ title: result.title, favicon: result.favicon, source: 'render' });
-          } else {
-            cleanup({ title: null, favicon: null, source: 'error' });
-          }
-        } catch {
-          cleanup({ title: null, favicon: null, source: 'error' });
-        }
-      });
-
-      win.webContents.on('did-fail-load', () => {
-        clearTimeout(timeout);
-        try { win.destroy(); } catch {}
-        resolve({ title: null, favicon: null, source: 'error' });
-      });
-
-      win.loadURL(targetUrl, {
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      });
-    });
-  }
-
-  /** 解码 HTML 实体 */
-  function decodeHtml(str) {
-    return str
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&#x27;/g, "'")
-      .replace(/&nbsp;/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
 
   /**
    * register-shortcut — 注册全局快捷键
@@ -1775,7 +1516,7 @@ function registerIpcHandlers() {
       const cropW = Math.round(width * sf);
       const cropH = Math.round(height * sf);
 
-      console.log(`[Screenshot] 裁剪[${source.engine}]: screen(${x},${y},${width},${height}) -> pixel(${cropX},${cropY},${cropW},${cropH}), sf=${sf}, display=${source.displayId}`);
+      if (!app.isPackaged) console.log(`[Screenshot] 裁剪[${source.engine}]: screen(${x},${y},${width},${height}) -> pixel(${cropX},${cropY},${cropW},${cropH}), sf=${sf}, display=${source.displayId}`);
 
       const cropped = source.crop({ x: cropX, y: cropY, width: cropW, height: cropH });
       const dataUrl = cropped.toDataUrl();
@@ -1898,376 +1639,13 @@ function registerIpcHandlers() {
   });
 
   // ========== 数据导出/导入/统计 IPC ==========
-
-  /** data:export — 导出 Excel 可读数据 + JSON 完整备份 */
-  ipcMain.handle('data:export', async () => {
-    try {
-      const XLSX = require('xlsx');
-      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-      const timeStr = new Date().toTimeString().slice(0, 5).replace(/:/g, '');
-      const defaultName = `DesktopSecretary_导出_${dateStr}_${timeStr}`;
-
-      const { filePath } = await dialog.showSaveDialog(mainWindow, {
-        title: '导出数据',
-        defaultPath: `${defaultName}.xlsx`,
-        filters: [
-          { name: 'Excel 文件', extensions: ['xlsx'] },
-          { name: '所有文件', extensions: ['*'] },
-        ],
-      });
-      if (!filePath) return { success: false, cancelled: true };
-
-      const dir = path.dirname(filePath);
-      const baseName = path.basename(filePath, path.extname(filePath));
-      const excelPath = path.join(dir, `${baseName}.xlsx`);
-      const backupPath = path.join(dir, `${baseName}_备份.json`);
-
-      // 读取所有数据
-      const workspaces = store.get('workspaces', []);
-      const todosGlobal = store.get('todosGlobal', []);
-      const globalQuickIcons = store.get('globalQuickIcons', []);
-      const aiSettings = decryptAiSettings(store.get('aiSettings', {}));
-      const tokenStats = store.get('tokenStats', {});
-
-      // 按工作区读取隔离数据
-      const allQuickLinks = [];
-      const allFileShortcuts = [];
-      for (const ws of workspaces) {
-        const ql = store.get(`quickLinks:${ws.id}`, {});
-        for (const [groupId, group] of Object.entries(ql)) {
-          for (const link of group.links || []) {
-            allQuickLinks.push({
-              工作区: ws.name,
-              分组: group.name || groupId,
-              标题: link.title,
-              URL: link.url,
-              添加日期: link.addedAt,
-            });
-          }
-        }
-        const fsData = store.get(`fileShortcuts:${ws.id}`, []);
-        for (const s of fsData) {
-          allFileShortcuts.push({
-            工作区: ws.name,
-            名称: s.name,
-            路径: s.path,
-            添加日期: s.addedAt,
-          });
-        }
-      }
-
-      // 生成 Excel
-      const wb = XLSX.utils.book_new();
-
-      const wsWorkspaces = XLSX.utils.json_to_sheet(workspaces.map((w) => ({ ID: w.id, 名称: w.name })));
-      XLSX.utils.book_append_sheet(wb, wsWorkspaces, '工作区');
-
-      const wsTodos = XLSX.utils.json_to_sheet(
-        todosGlobal.map((t) => ({
-          内容: t.text,
-          完成: t.done ? '是' : '否',
-          优先级: t.priority,
-          工作区ID: t.workspaceId || '',
-          创建时间: t.createdAt ? new Date(t.createdAt).toLocaleString('zh-CN') : '',
-        }))
-      );
-      XLSX.utils.book_append_sheet(wb, wsTodos, '待办事项');
-
-      const wsLinks = XLSX.utils.json_to_sheet(allQuickLinks);
-      XLSX.utils.book_append_sheet(wb, wsLinks, '快速链接');
-
-      const wsIcons = XLSX.utils.json_to_sheet(
-        globalQuickIcons.map((i) => ({ 标题: i.title, URL: i.url, 来源: i.titleSource }))
-      );
-      XLSX.utils.book_append_sheet(wb, wsIcons, '全局快捷图标');
-
-      const wsFiles = XLSX.utils.json_to_sheet(allFileShortcuts);
-      XLSX.utils.book_append_sheet(wb, wsFiles, '文件快捷方式');
-
-      const safeAiSettings = { ...aiSettings, apiKey: aiSettings.apiKey ? '***' : '' };
-      const wsAi = XLSX.utils.json_to_sheet([
-        { 项目: '模型', 值: safeAiSettings.provider },
-        { 项目: 'API Key', 值: safeAiSettings.apiKey },
-        { 项目: 'Base URL', 值: safeAiSettings.customBaseUrl || '' },
-        { 项目: '模型名称', 值: safeAiSettings.customModel || '' },
-        { 项目: '截图快捷键', 值: safeAiSettings.shortcutKey || '' },
-      ]);
-      XLSX.utils.book_append_sheet(wb, wsAi, 'AI 设置');
-
-      const wsToken = XLSX.utils.json_to_sheet([
-        { 项目: '今日消耗', 值: tokenStats.today || 0 },
-        { 项目: '本月消耗', 值: tokenStats.month || 0 },
-        { 项目: '上次请求', 值: tokenStats.lastRequest || 0 },
-      ]);
-      XLSX.utils.book_append_sheet(wb, wsToken, 'Token 统计');
-
-      XLSX.writeFile(wb, excelPath);
-
-      // 生成 JSON 备份（完整数据，含敏感信息，用于恢复）
-      const backupData = {
-        _meta: { appName: 'DesktopSecretary', version: '1.0.0', exportedAt: new Date().toISOString() },
-        workspaces,
-        todosGlobal,
-        globalQuickIcons,
-        aiSettings,
-        tokenStats,
-        fileShortcutViewMode: store.get('fileShortcutViewMode', 'icons'),
-        dockedEdge: store.get('dockedEdge', null),
-        dockBounds: store.get('dockBounds', null),
-        dockEdgeOffset: store.get('dockEdgeOffset', null),
-        windowWidthPercent: store.get('windowWidthPercent', 1.0),
-        autoLaunch: store.get('autoLaunch', false),
-      };
-      for (const ws of workspaces) {
-        backupData[`quickLinks:${ws.id}`] = store.get(`quickLinks:${ws.id}`, {});
-        backupData[`fileShortcuts:${ws.id}`] = store.get(`fileShortcuts:${ws.id}`, []);
-      }
-      // 保留 linkCache
-      backupData.linkCache = store.get('linkCache', {});
-
-      fs.writeFileSync(backupPath, JSON.stringify(backupData, null, 2), 'utf-8');
-
-      return { success: true, excelPath, backupPath };
-    } catch (err) {
-      console.error('[DataExport] 导出失败:', err);
-      return { success: false, error: err.message };
-    }
-  });
-
-  /** data:import — 从 JSON 备份恢复数据 */
-  ipcMain.handle('data:import', async () => {
-    try {
-      const { filePaths } = await dialog.showOpenDialog(mainWindow, {
-        title: '导入备份',
-        properties: ['openFile'],
-        filters: [{ name: 'JSON 备份', extensions: ['json'] }],
-      });
-      if (!filePaths || filePaths.length === 0) return { success: false, cancelled: true };
-
-      const content = fs.readFileSync(filePaths[0], 'utf-8');
-      const data = JSON.parse(content);
-
-      if (!data._meta || data._meta.appName !== 'DesktopSecretary') {
-        return { success: false, error: '无效的备份文件（缺少 DesktopSecretary 标识）' };
-      }
-
-      // 恢复所有数据键
-      for (const [key, value] of Object.entries(data)) {
-        if (key.startsWith('_')) continue;
-        safeStoreSet(key, value);
-      }
-
-      return { success: true, message: '数据已恢复，建议重启应用以确保所有组件重新加载。' };
-    } catch (err) {
-      console.error('[DataImport] 导入失败:', err);
-      return { success: false, error: err.message };
-    }
-  });
-
-  /** data:stats — 获取存储统计 */
-  ipcMain.handle('data:stats', () => {
-    try {
-      const stats = fs.statSync(store.path);
-      const fileSize = stats.size;
-      const fileSizeFormatted =
-        fileSize < 1024
-          ? `${fileSize} B`
-          : fileSize < 1024 * 1024
-            ? `${(fileSize / 1024).toFixed(1)} KB`
-            : `${(fileSize / (1024 * 1024)).toFixed(1)} MB`;
-
-      const workspaces = store.get('workspaces', []);
-      const todos = store.get('todosGlobal', []).length;
-      let links = 0;
-      let fileShortcuts = 0;
-      for (const ws of workspaces) {
-        const ql = store.get(`quickLinks:${ws.id}`, {});
-        for (const group of Object.values(ql)) {
-          links += (group.links || []).length;
-        }
-        fileShortcuts += store.get(`fileShortcuts:${ws.id}`, []).length;
-      }
-      const globalIcons = store.get('globalQuickIcons', []).length;
-
-      return {
-        success: true,
-        fileSize,
-        fileSizeFormatted,
-        counts: {
-          workspaces: workspaces.length,
-          todos,
-          links,
-          fileShortcuts,
-          globalIcons,
-        },
-      };
-    } catch (err) {
-      console.error('[DataStats] 统计失败:', err);
-      return { success: false, error: err.message };
-    }
-  });
+  registerDataIpcHandlers({ store, mainWindow, dialog, decryptAiSettings, safeStoreSet });
 
   // ========== 自动更新 IPC（基于 electron-updater）==========
-
-  ipcMain.handle('updater:check', async () => {
-    console.log('[AutoUpdate] 用户手动检查更新');
-    if (!autoUpdater) {
-      return { success: false, error: '自动更新模块未初始化' };
-    }
-    try {
-      const result = await autoUpdater.checkForUpdates();
-      return { success: true, updateInfo: result?.updateInfo || null };
-    } catch (err) {
-      console.error('[AutoUpdate] 检查更新失败:', err.message);
-      return { success: false, error: err.message };
-    }
-  });
-
-  ipcMain.handle('updater:download', async () => {
-    console.log('[AutoUpdate] 用户确认下载更新');
-    if (!autoUpdater) {
-      return { success: false, error: '自动更新模块未初始化' };
-    }
-    try {
-      await autoUpdater.downloadUpdate();
-      return { success: true };
-    } catch (err) {
-      console.error('[AutoUpdate] 下载更新失败:', err.message);
-      return { success: false, error: err.message };
-    }
-  });
-
-  ipcMain.handle('updater:quit-and-install', async () => {
-    console.log('[AutoUpdate] 用户确认退出并安装');
-    if (!autoUpdater) {
-      return { success: false, error: '自动更新模块未初始化' };
-    }
-    autoUpdater.quitAndInstall(false, true);
-    return { success: true };
-  });
+  registerUpdaterIpcHandlers({ getAutoUpdater: () => autoUpdater });
 
   // ========== 同步相关 IPC ==========
-
-  /** sync:sendCode — 发送注册验证码 */
-  ipcMain.handle('sync:sendCode', async (_event, email) => {
-    try {
-      const auth = getAuth();
-      if (!auth) throw new Error('同步模块未初始化');
-      if (!auth.verify) throw new Error('验证码模块未初始化');
-      return await auth.verify.sendCode(email.trim().toLowerCase());
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  });
-
-  /** sync:register — 用户注册（需验证码） */
-  ipcMain.handle('sync:register', async (_event, username, password, code, importLocalData = true) => {
-    try {
-      const auth = getAuth();
-      if (!auth) throw new Error('同步模块未初始化');
-      const result = await auth.register(username, password, code);
-      const uid = result.uid;
-      const engine = getEngine();
-      if (engine) {
-        if (importLocalData) {
-          // 将当前顶层数据绑定到新账户并推送
-          engine.profile.bindCurrentDataToProfile(uid);
-          engine.profile.activeUid = uid;
-          engine.push().catch((err) => console.error('[Sync] 注册后首次 Push 失败:', err.message));
-        } else {
-          // 空账户注册：将当前数据归档到匿名空间，清空顶层，不推送
-          engine.profile.archiveProfile('anonymous');
-          engine.profile.clearActiveKeys();
-          engine.profile.activeUid = uid;
-          console.log('[Profile] 空账户注册，已清空本地数据');
-        }
-      }
-      return result;
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  });
-
-  /** sync:login — 用户登录 */
-  ipcMain.handle('sync:login', async (_event, username, password) => {
-    try {
-      const auth = getAuth();
-      if (!auth) throw new Error('同步模块未初始化');
-      const result = await auth.login(username, password);
-      const uid = result.uid;
-      const engine = getEngine();
-      if (engine) {
-        // ⭐ 关键：切换 profile 时合并匿名数据
-        await engine.switchProfile(uid, { mergeAnonymous: true });
-        engine.pull().catch((err) => console.error('[Sync] 登录后自动 Pull 失败:', err.message));
-      }
-      return result;
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  });
-
-  /** sync:logout — 退出登录 */
-  ipcMain.handle('sync:logout', async () => {
-    try {
-      const auth = getAuth();
-      const engine = getEngine();
-      if (!auth) throw new Error('同步模块未初始化');
-
-      // 先归档当前账户数据，再切回匿名
-      const currentUid = engine?.profile?.activeUid;
-      if (engine && currentUid && currentUid !== 'anonymous') {
-        engine.profile.archiveProfile(currentUid);
-        await engine.switchProfile('anonymous', { mergeAnonymous: false });
-      }
-
-      return await auth.logout();
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  });
-
-
-
-  /** sync:getStatus — 获取登录状态 */
-  ipcMain.handle('sync:getStatus', () => {
-    const auth = getAuth();
-    if (!auth) return { isLoggedIn: false, error: '同步模块未初始化' };
-    return auth.getStatus();
-  });
-
-  /** sync:syncNow — 手动触发同步 */
-  ipcMain.handle('sync:syncNow', async () => {
-    try {
-      const engine = getEngine();
-      if (!engine) throw new Error('同步模块未初始化');
-      return await engine.sync();
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  });
-
-  /** sync:push — 手动上传 */
-  ipcMain.handle('sync:push', async () => {
-    try {
-      const engine = getEngine();
-      if (!engine) throw new Error('同步模块未初始化');
-      return await engine.push();
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  });
-
-  /** sync:pull — 手动下载 */
-  ipcMain.handle('sync:pull', async () => {
-    try {
-      const engine = getEngine();
-      if (!engine) throw new Error('同步模块未初始化');
-      return await engine.pull();
-    } catch (err) {
-      return { success: false, error: err.message };
-    }
-  });
+  registerSyncIpcHandlers({ getAuth, getEngine });
 }
 
 // ========== 单实例锁定（防止重复开启多个窗口）==========
@@ -2385,7 +1763,7 @@ app.whenReady().then(async () => {
     app.setLoginItemSettings({ openAtLogin: !!autoLaunch });
 
     // 启动时清理过期缓存
-    cleanupLinkCache();
+    cleanupLinkCache(store);
 
     // 启动时清理过期的临时更新安装包
     try {
