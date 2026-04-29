@@ -320,7 +320,7 @@ function registerIpcHandlers() {
   // 数据/同步/更新 IPC
   registerDataIpcHandlers({
     store: storeManager,
-    mainWindow: getMainWindow(),
+    getMainWindow,
     dialog,
     decryptAiSettings: (s) => storeManager.decryptAiSettings(s),
     safeStoreSet: (k, v) => storeManager.safeStoreSet(k, v),
@@ -385,12 +385,13 @@ app.whenReady().then(async () => {
     shortcutManager = new ShortcutManager({ globalShortcut, getMainWindow });
 
     windowManager = new WindowManager({ screen, getEnv, getDockManager, platform });
+
+    // 4. 注册 IPC（必须在窗口加载前完成，否则渲染进程调用时 handler 还未注册）
+    registerIpcHandlers();
+
     await windowManager.createWindow();
 
     screenshotManager = new ScreenshotManager({ screen, ipcMain, getMainWindow, platform, getDockManager });
-
-    // 4. 注册 IPC
-    registerIpcHandlers();
 
     console.log('createWindow() completed, window count:', BrowserWindow.getAllWindows().length);
 

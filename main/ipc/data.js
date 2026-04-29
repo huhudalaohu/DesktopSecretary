@@ -6,7 +6,7 @@ const { ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
-function registerDataIpcHandlers({ store, mainWindow, dialog, decryptAiSettings, safeStoreSet }) {
+function registerDataIpcHandlers({ store, getMainWindow, dialog, decryptAiSettings, safeStoreSet }) {
   /** data:export — 导出 Excel 可读数据 + JSON 完整备份 */
   ipcMain.handle('data:export', async () => {
     try {
@@ -15,7 +15,7 @@ function registerDataIpcHandlers({ store, mainWindow, dialog, decryptAiSettings,
       const timeStr = new Date().toTimeString().slice(0, 5).replace(/:/g, '');
       const defaultName = `DesktopSecretary_导出_${dateStr}_${timeStr}`;
 
-      const { filePath } = await dialog.showSaveDialog(mainWindow, {
+      const { filePath } = await dialog.showSaveDialog(getMainWindow ? getMainWindow() : null, {
         title: '导出数据',
         defaultPath: `${defaultName}.xlsx`,
         filters: [
@@ -145,7 +145,7 @@ function registerDataIpcHandlers({ store, mainWindow, dialog, decryptAiSettings,
   /** data:import — 从 JSON 备份恢复数据 */
   ipcMain.handle('data:import', async () => {
     try {
-      const { filePaths } = await dialog.showOpenDialog(mainWindow, {
+      const { filePaths } = await dialog.showOpenDialog(getMainWindow ? getMainWindow() : null, {
         title: '导入备份',
         properties: ['openFile'],
         filters: [{ name: 'JSON 备份', extensions: ['json'] }],
