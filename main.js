@@ -24,8 +24,6 @@
 const { app, BrowserWindow, screen, ipcMain, shell, desktopCapturer, dialog, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const https = require('https');
-const http = require('http');
 const os = require('os');
 const { spawn } = require('child_process');
 const platform = require('./main/platform');
@@ -82,16 +80,15 @@ if (TCB_SECRET_ID && TCB_SECRET_KEY) {
 const DEV_SERVER_URL = process.env.ELECTRON_RENDERER_URL || 'http://localhost:5173';
 const DEV_SERVER_WAIT_MS = 15000;
 
-// 公开更新 API（无需 SecretKey，客户端直接 fetch）
-// 优先读取环境变量（开发模式），fallback 到硬编码的 COS 地址（生产环境开箱即用）
-const UPDATE_API_URL = process.env.UPDATE_API_URL || 'https://ds-update-1420931574.cos.ap-guangzhou.myqcloud.com/update.json';
-
 // electron-store 使用 dynamic import（v8+ 为 ESM-only）
 let Store;
 let store;
 
 // 主窗口引用
 let mainWindow = null;
+
+// electron-updater 实例（在 app.whenReady 中初始化）
+let autoUpdater = null;
 
 // 截图 overlay 窗口池（每块显示器一个，解决多屏 + 跨 DPI 的渲染问题）
 // key: String(display.id)，value: BrowserWindow
@@ -2110,202 +2107,42 @@ function registerIpcHandlers() {
     }
   });
 
-  // ========== 更新检查 IPC ==========
+  // ========== 自动更新 IPC（基于 electron-updater）==========
 
-  /** check-for-update — 检查更新
-   *  优先使用公开 HTTP API（无需 SecretKey），fallback 到 CloudBase SDK（兼容旧配置）
-   */
-  ipcMain.handle('check-for-update', async (_event, currentVersion) => {
-    console.log('[Update] 检查更新, 当前版本:', currentVersion);
-
-    // 发送检查中状态
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update:status', { status: 'checking', version: currentVersion });
+  ipcMain.handle('updater:check', async () => {
+    console.log('[AutoUpdate] 用户手动检查更新');
+    if (!autoUpdater) {
+      return { success: false, error: '自动更新模块未初始化' };
     }
-
-    // 版本号比较：返回负数表示 v1 < v2，0 表示相等，正数表示 v1 > v2
-    function compareVersion(v1, v2) {
-      const parts1 = String(v1).split('.').map(Number);
-      const parts2 = String(v2).split('.').map(Number);
-      const maxLen = Math.max(parts1.length, parts2.length);
-      for (let i = 0; i < maxLen; i++) {
-        const a = parts1[i] || 0;
-        const b = parts2[i] || 0;
-        if (a !== b) return a - b;
-      }
-      return 0;
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      return { success: true, updateInfo: result?.updateInfo || null };
+    } catch (err) {
+      console.error('[AutoUpdate] 检查更新失败:', err.message);
+      return { success: false, error: err.message };
     }
-
-    // 辅助函数：统一把后端返回格式映射成前端期望的 status 格式
-    // 不再盲目相信 result.hasUpdate，而是自己做版本号比较
-    function mapResult(result) {
-      const latestVersion = result && (result.version || result.latestVersion);
-      const shouldUpdate = latestVersion && compareVersion(currentVersion, latestVersion) < 0;
-      const payload = shouldUpdate
-        ? {
-            status: 'available',
-            version: currentVersion,
-            latestVersion,
-            releaseNotes: result.message || result.releaseNotes,
-            downloadUrl: result.downloadUrl || null,
-          }
-        : {
-            status: 'latest',
-            version: currentVersion,
-          };
-      console.log('[Update] 版本比较:', currentVersion, 'vs', latestVersion, '→', payload.status);
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('update:status', payload);
-      }
-      return result;
-    }
-
-    // ========== 公开 HTTP API（update.json）==========
-    if (UPDATE_API_URL) {
-      try {
-        const url = new URL(UPDATE_API_URL);
-        url.searchParams.set('version', currentVersion);
-        const resp = await fetch(url.toString(), { signal: AbortSignal.timeout(8000) });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const result = await resp.json();
-        console.log('[Update] HTTP API 返回:', result);
-        return mapResult(result);
-      } catch (err) {
-        console.error('[Update] HTTP API 调用失败:', err.message);
-        const errorPayload = { status: 'error', version: currentVersion, error: err.message };
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('update:status', errorPayload);
-        }
-        return { success: false, error: err.message };
-      }
-    }
-
-    const errMsg = '未配置更新接口（UPDATE_API_URL），自动更新已禁用';
-    console.warn('[Update]', errMsg);
-    const errorPayload = { status: 'error', version: currentVersion, error: errMsg };
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('update:status', errorPayload);
-    }
-    return { success: false, error: errMsg };
   });
 
-  // 保存下载的安装包路径，供安装步骤使用
-  let updateInstallerPath = null;
-
-  /** download-update — 下载更新安装包到临时目录
-   *  支持 HTTP 重定向（最多 5 次），自动清理失败时的临时文件
-   */
-  ipcMain.handle('download-update', async (_event, downloadUrl) => {
-    console.log('[Update] 开始下载:', downloadUrl);
-    updateInstallerPath = null;
-
-    const tmpDir = os.tmpdir();
-    const fileName = `DesktopSecretary-Update-${Date.now()}.exe`;
-    const filePath = path.join(tmpDir, fileName);
-    const MAX_REDIRECTS = 5;
-
-    return new Promise((resolve, reject) => {
-      const fileStream = fs.createWriteStream(filePath);
-      let receivedBytes = 0;
-      let totalBytes = 0;
-
-      function doDownload(url, redirectsLeft) {
-        const urlObj = new URL(url);
-        const httpModule = urlObj.protocol === 'https:' ? https : http;
-
-        const request = httpModule.get(url, (response) => {
-          // 处理 HTTP 重定向 (301/302/307/308)
-          if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-            if (redirectsLeft <= 0) {
-              fs.unlink(filePath, () => {});
-              reject(new Error('下载重定向次数过多'));
-              return;
-            }
-            console.log('[Update] 跟随重定向:', response.headers.location);
-            doDownload(response.headers.location, redirectsLeft - 1);
-            return;
-          }
-
-          if (response.statusCode !== 200) {
-            fs.unlink(filePath, () => {});
-            reject(new Error(`下载失败，HTTP ${response.statusCode}`));
-            return;
-          }
-
-          totalBytes = parseInt(response.headers['content-length'] || '0', 10);
-
-          response.on('data', (chunk) => {
-            receivedBytes += chunk.length;
-            const progress = totalBytes > 0 ? Math.round((receivedBytes / totalBytes) * 100) : 0;
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('update:status', {
-                status: 'downloading',
-                progress,
-                receivedBytes,
-                totalBytes,
-              });
-            }
-          });
-
-          response.pipe(fileStream);
-
-          fileStream.on('finish', () => {
-            updateInstallerPath = filePath;
-            console.log('[Update] 下载完成:', filePath);
-            if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('update:status', { status: 'downloaded', installerPath: filePath });
-            }
-            resolve({ success: true, path: filePath });
-          });
-        });
-
-        request.on('error', (err) => {
-          fs.unlink(filePath, () => {});
-          console.error('[Update] 下载失败:', err);
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            mainWindow.webContents.send('update:status', { status: 'error', error: err.message });
-          }
-          reject(err);
-        });
-      }
-
-      fileStream.on('error', (err) => {
-        fs.unlink(filePath, () => {});
-        console.error('[Update] 写入文件失败:', err);
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('update:status', { status: 'error', error: err.message });
-        }
-        reject(err);
-      });
-
-      doDownload(downloadUrl, MAX_REDIRECTS);
-    });
+  ipcMain.handle('updater:download', async () => {
+    console.log('[AutoUpdate] 用户确认下载更新');
+    if (!autoUpdater) {
+      return { success: false, error: '自动更新模块未初始化' };
+    }
+    try {
+      await autoUpdater.downloadUpdate();
+      return { success: true };
+    } catch (err) {
+      console.error('[AutoUpdate] 下载更新失败:', err.message);
+      return { success: false, error: err.message };
+    }
   });
 
-  /** install-update — 打开安装程序并退出应用
-   *  最可靠的方式：直接用系统默认方式打开安装包，让用户手动完成安装向导。
-   *  避免静默安装 /S 在 oneClick:false 模式下不稳定的问题。
-   */
-  ipcMain.handle('install-update', async () => {
-    if (!updateInstallerPath || !fs.existsSync(updateInstallerPath)) {
-      return { success: false, error: '安装包不存在，请重新下载' };
+  ipcMain.handle('updater:quit-and-install', async () => {
+    console.log('[AutoUpdate] 用户确认退出并安装');
+    if (!autoUpdater) {
+      return { success: false, error: '自动更新模块未初始化' };
     }
-
-    console.log('[Update] 打开安装程序:', updateInstallerPath);
-
-    // 先关闭所有窗口，释放文件锁
-    BrowserWindow.getAllWindows().forEach((win) => {
-      try { if (!win.isDestroyed()) win.destroy(); } catch {}
-    });
-
-    // 用系统默认方式打开安装包（用户会看到 NSIS 安装向导）
-    shell.openPath(updateInstallerPath);
-
-    // 延迟退出应用，避免和安装向导冲突
-    setTimeout(() => {
-      app.quit();
-    }, 500);
-
+    autoUpdater.quitAndInstall(false, true);
     return { success: true };
   });
 
@@ -2464,7 +2301,8 @@ app.whenReady().then(async () => {
     console.log('createWindow() completed, window count:', BrowserWindow.getAllWindows().length);
 
     // ========== electron-updater 自动更新事件监听 ==========
-    const { autoUpdater } = require('electron-updater');
+    const { autoUpdater: updater } = require('electron-updater');
+    autoUpdater = updater;
 
     // 按平台设置更新源：Win → updates/win/latest.yml，Mac → updates/mac/latest-mac.yml
     const platformDir = process.platform === 'darwin' ? 'mac' : 'win';

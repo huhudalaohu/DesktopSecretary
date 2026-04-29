@@ -38,10 +38,7 @@
     "electronDownload": {
       "mirror": "https://npmmirror.com/mirrors/electron/"
     },
-    "publish": {
-      "provider": "generic",
-      "url": "https://ds-update-1420931574.cos.ap-guangzhou.myqcloud.com/updates"
-    },
+    "publish": null,
     "win": {
       "target": "nsis",
       "icon": "build/icon.png",

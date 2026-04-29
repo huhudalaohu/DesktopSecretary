@@ -174,16 +174,16 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
     getAutoLaunch: () => resolve(false),
     setAutoLaunch: () => resolve({ success: true }),
 
-    checkForUpdate: async (currentVersion) => {
+    checkUpdate: async () => {
       await new Promise((r) => setTimeout(r, 600));
-      return { success: true, hasUpdate: false, currentVersion, latestVersion: currentVersion };
+      return { success: true, hasUpdate: false, status: 'latest' };
     },
     onUpdateStatus: () => () => {},
     downloadUpdate: async () => {
       await new Promise((r) => setTimeout(r, 1500));
       return { success: true };
     },
-    installUpdate: async () => {
+    quitAndInstall: async () => {
       alert('安装（浏览器预览模式下不可用）');
       return { success: true };
     },
@@ -266,16 +266,16 @@ if (typeof window !== 'undefined' && !window.desktopAPI) {
 
   // 额外暴露 electronAPI mock（设置页检查更新等功能使用）
   window.electronAPI = {
-    checkForUpdate: async (version) => {
+    checkUpdate: async () => {
       await new Promise((r) => setTimeout(r, 600));
-      return { success: true, hasUpdate: false, currentVersion: version, latestVersion: version, status: 'latest' };
+      return { success: true, hasUpdate: false, status: 'latest' };
     },
     onUpdateStatus: () => () => {},
     downloadUpdate: async () => {
       await new Promise((r) => setTimeout(r, 1500));
       return { success: true };
     },
-    installUpdate: async () => {
+    quitAndInstall: async () => {
       alert('安装（浏览器预览模式下不可用）');
       return { success: true };
     },

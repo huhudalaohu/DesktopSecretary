@@ -540,7 +540,7 @@ export default function App() {
     setUpdateStatus('checking');
     setUpdateInfo(null);
     try {
-      await api.checkForUpdate(CURRENT_APP_VERSION);
+      await api.checkUpdate();
     } catch (err) {
       setUpdateStatus('error');
       setUpdateInfo({ error: err.message });
@@ -548,13 +548,8 @@ export default function App() {
   };
 
   const handleDownloadUpdate = async () => {
-    if (!updateInfo?.downloadUrl) {
-      setUpdateStatus('error');
-      setUpdateInfo({ error: '下载链接不可用' });
-      return;
-    }
     try {
-      await api.downloadUpdate(updateInfo.downloadUrl);
+      await api.downloadUpdate();
     } catch (err) {
       setUpdateStatus('error');
       setUpdateInfo({ error: err.message });
@@ -563,7 +558,7 @@ export default function App() {
 
   const handleInstallUpdate = async () => {
     try {
-      await api.installUpdate();
+      await api.quitAndInstall();
     } catch (err) {
       setUpdateStatus('error');
       setUpdateInfo({ error: err.message });

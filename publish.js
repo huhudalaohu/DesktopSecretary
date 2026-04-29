@@ -15,7 +15,6 @@
  *     │   │   ├── DesktopSecretary-1.0.8-mac-arm64.zip
  *     │   │   └── DesktopSecretary-1.0.8-mac-x64.zip
  *     │   └── 1.0.8/               ← 旧版本归档（win + mac 混合）
- *     └── update.json              ← 兼容旧 Windows 客户端的更新检查入口
  *
  * 用法：
  *   node publish.js --platform=win    (默认)
@@ -144,19 +143,6 @@ async function main() {
 
     // 归档
     uploadList.push({ local: path.join(distPath, installer), remote: `updates/${version}/${installer}` });
-
-    // 生成并上传 update.json（兼容旧客户端）
-    const releaseNotes = getReleaseNotes(version) || `DesktopSecretary ${version} 已发布`;
-    const updateJson = {
-      hasUpdate: true,
-      version: version,
-      latestVersion: version,
-      message: releaseNotes,
-      downloadUrl: `${BASE_URL}/updates/win/${installer}`,
-    };
-    const updateJsonPath = path.join(distPath, 'update.json');
-    fs.writeFileSync(updateJsonPath, JSON.stringify(updateJson, null, 2), 'utf8');
-    uploadList.push({ local: updateJsonPath, remote: 'update.json' });
   }
 
   if (isMac) {
@@ -195,7 +181,6 @@ async function main() {
   console.log(`[Publish] 发布完成！平台: ${platform.toUpperCase()}，版本: ${version}`);
   if (isWin) {
     console.log(`[Publish] Windows 更新检查: ${BASE_URL}/updates/win/latest.yml`);
-    console.log(`[Publish] 旧客户端兼容: ${BASE_URL}/update.json`);
   }
   if (isMac) {
     console.log(`[Publish] macOS 更新检查: ${BASE_URL}/updates/mac/latest-mac.yml`);

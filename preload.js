@@ -209,10 +209,10 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   /** 设置开机自启状态 */
   setAutoLaunch: (enabled) => ipcRenderer.invoke('set-auto-launch', enabled),
 
-  // ========== 更新检查 ==========
+  // ========== 自动更新（基于 electron-updater）==========
 
   /** 触发检查更新 */
-  checkForUpdate: (currentVersion) => ipcRenderer.invoke('check-for-update', currentVersion),
+  checkUpdate: () => ipcRenderer.invoke('updater:check'),
 
   /** 监听更新状态推送 */
   onUpdateStatus: (callback) => {
@@ -221,11 +221,11 @@ contextBridge.exposeInMainWorld('desktopAPI', {
     return () => ipcRenderer.removeListener('update:status', handler);
   },
 
-  /** 下载更新安装包 */
-  downloadUpdate: (url) => ipcRenderer.invoke('download-update', url),
+  /** 开始下载更新 */
+  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
 
-  /** 静默安装并退出 */
-  installUpdate: () => ipcRenderer.invoke('install-update'),
+  /** 退出并安装更新 */
+  quitAndInstall: () => ipcRenderer.invoke('updater:quit-and-install'),
 
   /** 导出数据（Excel + JSON 备份） */
   exportData: () => ipcRenderer.invoke('data:export'),
@@ -309,14 +309,14 @@ contextBridge.exposeInMainWorld('desktopAPI', {
 
 // 额外暴露 electronAPI（设置页检查更新等功能使用）
 contextBridge.exposeInMainWorld('electronAPI', {
-  checkForUpdate: (version) => ipcRenderer.invoke('check-for-update', version),
+  checkUpdate: () => ipcRenderer.invoke('updater:check'),
   onUpdateStatus: (callback) => {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on('update:status', handler);
     return () => ipcRenderer.removeListener('update:status', handler);
   },
-  downloadUpdate: (url) => ipcRenderer.invoke('download-update', url),
-  installUpdate: () => ipcRenderer.invoke('install-update'),
+  downloadUpdate: () => ipcRenderer.invoke('updater:download'),
+  quitAndInstall: () => ipcRenderer.invoke('updater:quit-and-install'),
 });
 
 // === 拖放文件路径预存（解决 frameless 窗口 getFilePath 失效问题）===
