@@ -1,7 +1,0 @@
-{
-  "hasUpdate": true,
-  "version": "1.0.4",
-  "latestVersion": "1.0.4",
-  "message": "DesktopSecretary 1.0.4 更新内容：\n\n- 修复截图裁剪后 Promise 挂起问题\n- 修复跨磁盘文件移动失败\n- 修复窗口宽度重启后丢失\n- 修复开发模式截图 Overlay 加载失败\n- 移除源码中硬编码的腾讯云密钥",
-  "downloadUrl": "https://ds-update-1420931574.cos.ap-guangzhou.myqcloud.com/updates/1.0.4/DesktopSecretary%20Setup%201.0.4.exe"
-}

@@ -17,7 +17,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronRight, ChevronDown, Pencil, Trash2, GripVertical, Loader2, X, Circle, Plus } from 'lucide-react';
-import { MODEL_PROVIDERS, URL_TITLE_SYSTEM_PROMPT, extractTokens, recordTokenUsage } from '../ai-config';
+import { MODEL_PROVIDERS, URL_TITLE_SYSTEM_PROMPT, extractTokens, recordTokenUsage } from '../../../config/ai-config';
 
 const api = window.desktopAPI;
 

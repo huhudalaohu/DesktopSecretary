@@ -4,7 +4,7 @@
  */
 // 仅在 Vite 开发模式（浏览器预览）下加载 mock，生产构建中会被 tree-shaking 移除
 if (import.meta.env.DEV) {
-  import('./browser-mock');
+  import('./config/browser-mock');
 }
 import React from 'react';
 import ReactDOM from 'react-dom/client';

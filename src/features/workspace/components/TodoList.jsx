@@ -18,7 +18,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Plus, Trash2, Check, ListFilter, ChevronDown, Pencil, Camera, Loader2 } from 'lucide-react';
-import { DEFAULT_REMINDER_LEVELS } from './ReminderLevelSettings';
+import { DEFAULT_REMINDER_LEVELS } from '../../reminders/components/ReminderLevelSettings';
 
 const api = window.desktopAPI;
 

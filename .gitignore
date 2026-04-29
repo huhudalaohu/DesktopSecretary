@@ -3,6 +3,13 @@ node_modules/
 dist/
 *.log
 config/publish-config.json
-
 release/
 
+# 开发/运维脚本（不应入仓）
+scripts/dev/
+scripts/ops/
+
+# 系统文件
+.DS_Store
+*.local
+.env.*.local

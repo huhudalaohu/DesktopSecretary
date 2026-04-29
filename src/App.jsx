@@ -3,15 +3,15 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import WorkspaceSwitcher from './components/WorkspaceSwitcher';
-import FileNavigator from './components/FileNavigator';
-import QuickNote from './components/QuickNote';
-import TodoList from './components/TodoList';
-import AIAssistant from './components/AIAssistant';
-import QuickLinks from './components/QuickLinks';
-import Timeline from './components/Timeline';
-import ReminderLevelSettings, { DEFAULT_REMINDER_LEVELS } from './components/ReminderLevelSettings';
-import SyncPanel from './components/SyncPanel';
+import WorkspaceSwitcher from './features/workspace/components/WorkspaceSwitcher';
+import FileNavigator from './features/files/components/FileNavigator';
+import QuickNote from './features/files/components/QuickNote';
+import TodoList from './features/workspace/components/TodoList';
+import AIAssistant from './features/ai/components/AIAssistant';
+import QuickLinks from './features/files/components/QuickLinks';
+import Timeline from './features/reminders/components/Timeline';
+import ReminderLevelSettings, { DEFAULT_REMINDER_LEVELS } from './features/reminders/components/ReminderLevelSettings';
+import SyncPanel from './features/sync/components/SyncPanel';
 import {
   MODEL_PROVIDERS,
   PROVIDER_KEYS,
@@ -21,7 +21,7 @@ import {
   extractTokens,
   loadTokenStats,
   recordTokenUsage,
-} from './ai-config';
+} from './config/ai-config';
 import { X, Pin, PinOff, Settings, Key, Eye, EyeOff, ChevronDown, Trash2, RotateCw, Download, CheckCircle, ArrowUpCircle, AlertCircle } from 'lucide-react';
 import {
   DndContext,

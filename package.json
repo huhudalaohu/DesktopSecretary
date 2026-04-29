@@ -8,7 +8,7 @@
     "dev": "concurrently \"vite\" \"electron .\"",
     "build": "vite build",
     "dist": "npm run build && electron-builder",
-    "publish": "npm run dist && node publish.js"
+    "publish": "npm run dist && node scripts/build/publish.js"
   },
   "build": {
     "productName": "DesktopSecretary",

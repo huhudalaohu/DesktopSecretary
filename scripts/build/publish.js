@@ -36,13 +36,13 @@ const isMac = platform === 'mac';
 const isWin = platform === 'win';
 
 // ========== 读取 package.json 版本号 ==========
-const pkgPath = path.join(__dirname, 'package.json');
+const pkgPath = path.join(__dirname, '..', '..', 'package.json');
 const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
 const version = pkg.version;
 
 // electron-builder 输出目录
 const outputDir = pkg.build?.directories?.output || 'release';
-const distPath = path.join(__dirname, outputDir);
+const distPath = path.join(__dirname, '..', '..', outputDir);
 
 // ========== 读取密钥 ==========
 function getCredentials() {
@@ -53,7 +53,7 @@ function getCredentials() {
     return { secretId: envId, secretKey: envKey };
   }
 
-  const configPath = path.join(__dirname, 'config', 'publish-config.json');
+  const configPath = path.join(__dirname, '..', '..', 'config', 'publish-config.json');
   if (fs.existsSync(configPath)) {
     try {
       const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -107,7 +107,7 @@ function deleteCosObject(cos, key) {
 
 // ========== 读取 release notes ==========
 function getReleaseNotes(ver) {
-  const notesPath = path.join(__dirname, 'config', 'release-notes.json');
+  const notesPath = path.join(__dirname, '..', '..', 'config', 'release-notes.json');
   if (!fs.existsSync(notesPath)) return null;
   try {
     const notes = JSON.parse(fs.readFileSync(notesPath, 'utf8'));
