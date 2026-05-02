@@ -46,32 +46,21 @@ jobs:
         run: npx electron-builder --mac --publish=never
 
       # ========== 自动上传到 GitHub Release ==========
-      - name: Upload to GitHub Release (Windows)
+      - name: Upload Windows assets to Release
         if: matrix.os == 'windows-latest' && github.event_name == 'release'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          tag_name="${{ github.event.release.tag_name }}"
-          # 找到构建出的 .exe 和 .blockmap
-          for f in release/*.exe release/*.exe.blockmap; do
-            [ -f "$f" ] || continue
-            echo "Uploading $f -> release $tag_name"
-            gh release upload "$tag_name" "$f" --clobber --repo ${{ github.repository }}
-          done
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.exe
+            release/*.exe.blockmap
 
-      - name: Upload to GitHub Release (macOS)
+      - name: Upload macOS assets to Release
         if: matrix.os == 'macos-latest' && github.event_name == 'release'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          tag_name="${{ github.event.release.tag_name }}"
-          for f in release/*.dmg release/*.zip; do
-            [ -f "$f" ] || continue
-            echo "Uploading $f -> release $tag_name"
-            gh release upload "$tag_name" "$f" --clobber --repo ${{ github.repository }}
-          done
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.dmg
+            release/*.zip
 
       # ========== 手动触发时发布到 COS ==========
       - name: Publish to COS (Windows)
