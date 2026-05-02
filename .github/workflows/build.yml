@@ -6,6 +6,8 @@ on:
   pull_request:
     branches: [master, main]
   workflow_dispatch:   # 手动触发：构建 + 上传 COS
+  release:
+    types: [published] # 发布 Release 时自动构建并上传产物
 
 jobs:
   build:
@@ -41,20 +43,50 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npx electron-builder --mac --publish=never
 
+      # ========== 自动上传到 GitHub Release ==========
+      - name: Upload to GitHub Release (Windows)
+        if: matrix.os == 'windows-latest' && github.event_name == 'release'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag_name="${{ github.event.release.tag_name }}"
+          # 找到构建出的 .exe 和 .blockmap
+          for f in release/*.exe release/*.exe.blockmap; do
+            [ -f "$f" ] || continue
+            echo "Uploading $f -> release $tag_name"
+            gh release upload "$tag_name" "$f" --clobber --repo ${{ github.repository }}
+          done
+
+      - name: Upload to GitHub Release (macOS)
+        if: matrix.os == 'macos-latest' && github.event_name == 'release'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          tag_name="${{ github.event.release.tag_name }}"
+          for f in release/*.dmg release/*.zip; do
+            [ -f "$f" ] || continue
+            echo "Uploading $f -> release $tag_name"
+            gh release upload "$tag_name" "$f" --clobber --repo ${{ github.repository }}
+          done
+
+      # ========== 手动触发时发布到 COS ==========
       - name: Publish to COS (Windows)
         if: matrix.os == 'windows-latest' && github.event_name == 'workflow_dispatch'
         env:
           TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
           TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
-        run: node publish.js --platform=win
+        run: node scripts/build/publish.js --platform=win
 
       - name: Publish to COS (macOS)
         if: matrix.os == 'macos-latest' && github.event_name == 'workflow_dispatch'
         env:
           TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
           TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
-        run: node publish.js --platform=mac
+        run: node scripts/build/publish.js --platform=mac
 
+      # ========== 构建产物归档（调试用）==========
       - name: Upload Windows artifacts
         if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
