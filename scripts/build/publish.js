@@ -14,11 +14,16 @@
  *     │   │   ├── DesktopSecretary-1.0.8-mac-x64.dmg
  *     │   │   ├── DesktopSecretary-1.0.8-mac-arm64.zip
  *     │   │   └── DesktopSecretary-1.0.8-mac-x64.zip
- *     │   └── 1.0.8/               ← 旧版本归档（win + mac 混合）
+ *     │   └── 1.0.8/               ← 旧版本归档（按平台子目录分离）
+ *     │       ├── win/
+ *     │       │   └── DesktopSecretary-1.0.8-win-x64.exe
+ *     │       └── mac/
+ *     │           └── DesktopSecretary-1.0.8-mac-arm64.zip
  *
  * 用法：
- *   node publish.js --platform=win    (默认)
+ *   node publish.js --platform=win                (默认)
  *   node publish.js --platform=mac
+ *   node publish.js --platform=win --dry-run      (预览，不实际上传/删除)
  */
 
 const fs = require('fs');
@@ -32,6 +37,7 @@ const BASE_URL = `https://${BUCKET}.cos.${REGION}.myqcloud.com`;
 
 // ========== 解析命令行参数 ==========
 const platform = process.argv.includes('--platform=mac') ? 'mac' : 'win';
+const isDryRun = process.argv.includes('--dry-run');
 const isMac = platform === 'mac';
 const isWin = platform === 'win';
 
@@ -105,6 +111,55 @@ function deleteCosObject(cos, key) {
   });
 }
 
+/**
+ * 列出 COS 中指定前缀下的所有对象
+ */
+async function listObjects(cos, prefix) {
+  const keys = [];
+  let marker = null;
+  while (true) {
+    const res = await new Promise((resolve, reject) => {
+      cos.getBucket(
+        { Bucket: BUCKET, Region: REGION, Prefix: prefix, MaxKeys: 1000, Marker: marker },
+        (err, data) => {
+          if (err) reject(err);
+          else resolve(data);
+        }
+      );
+    });
+    for (const obj of res.Contents || []) {
+      if (obj.Key !== prefix) keys.push(obj.Key);
+    }
+    if (!res.IsTruncated) break;
+    marker = res.NextMarker;
+  }
+  return keys;
+}
+
+/**
+ * 清理 updates/{platform}/ 下的所有旧文件
+ */
+async function cleanPlatformDir(cos, platform) {
+  const prefix = `updates/${platform}/`;
+  const keys = await listObjects(cos, prefix);
+  if (keys.length === 0) {
+    console.log(`[Publish] ${prefix} 下无旧文件需要清理`);
+    return;
+  }
+  console.log(`[Publish] 发现 ${prefix} 下有 ${keys.length} 个旧文件，准备清理:`);
+  for (const key of keys) {
+    console.log(`  - ${key}`);
+  }
+  if (isDryRun) {
+    console.log('[Publish] [dry-run] 跳过删除');
+    return;
+  }
+  for (const key of keys) {
+    await deleteCosObject(cos, key);
+    console.log(`  [已删除] ${key}`);
+  }
+}
+
 // ========== 读取 release notes ==========
 function getReleaseNotes(ver) {
   const notesPath = path.join(__dirname, '..', '..', 'config', 'release-notes.json');
@@ -119,7 +174,7 @@ function getReleaseNotes(ver) {
 
 // ========== 主流程 ==========
 async function main() {
-  console.log(`[Publish] 开始发布，平台: ${platform.toUpperCase()}，版本: ${version}`);
+  console.log(`[Publish] 开始发布，平台: ${platform.toUpperCase()}，版本: ${version}${isDryRun ? ' (dry-run)' : ''}`);
 
   // 读取密钥
   const { secretId, secretKey } = getCredentials();
@@ -142,7 +197,8 @@ async function main() {
     uploadList.push({ local: path.join(distPath, latestYml), remote: 'updates/win/latest.yml' });
 
     // 归档
-    uploadList.push({ local: path.join(distPath, installer), remote: `updates/${version}/${installer}` });
+    uploadList.push({ local: path.join(distPath, installer), remote: `updates/${version}/win/${installer}` });
+    if (blockmap) uploadList.push({ local: path.join(distPath, blockmap), remote: `updates/${version}/win/${blockmap}` });
   }
 
   if (isMac) {
@@ -152,7 +208,7 @@ async function main() {
     const latestMacYml = files.find((f) => f === 'latest-mac.yml');
 
     if (dmgs.length === 0) throw new Error(`在 ${distPath} 下未找到 .dmg 安装包`);
-    if (!latestMacYml) throw new Error(`在 ${distPath} 下未找到 latest-mac.yml`);
+    if (!latestMacYml) throw new Error(`在 ${distPath} 下未找到 latest-mac.yml。请确保 mac 构建成功并生成了该文件。`);
 
     for (const f of dmgs) {
       uploadList.push({ local: path.join(distPath, f), remote: `updates/mac/${f}` });
@@ -164,21 +220,34 @@ async function main() {
 
     // 归档
     for (const f of dmgs) {
-      uploadList.push({ local: path.join(distPath, f), remote: `updates/${version}/${f}` });
+      uploadList.push({ local: path.join(distPath, f), remote: `updates/${version}/mac/${f}` });
     }
     for (const f of zips) {
-      uploadList.push({ local: path.join(distPath, f), remote: `updates/${version}/${f}` });
+      uploadList.push({ local: path.join(distPath, f), remote: `updates/${version}/mac/${f}` });
     }
   }
 
+  // 清理旧版本
+  await cleanPlatformDir(cos, platform);
+
   // 执行上传
+  console.log('');
+  console.log(`[Publish] 将要上传 ${uploadList.length} 个文件:`);
   for (const item of uploadList) {
-    console.log(`[Publish] 上传: ${item.remote}`);
-    await uploadFile(cos, item.remote, item.local);
+    console.log(`  → ${item.remote}`);
+  }
+
+  if (isDryRun) {
+    console.log('[Publish] [dry-run] 跳过实际上传');
+  } else {
+    for (const item of uploadList) {
+      console.log(`[Publish] 上传: ${item.remote}`);
+      await uploadFile(cos, item.remote, item.local);
+    }
   }
 
   console.log('');
-  console.log(`[Publish] 发布完成！平台: ${platform.toUpperCase()}，版本: ${version}`);
+  console.log(`[Publish] 发布完成！平台: ${platform.toUpperCase()}，版本: ${version}${isDryRun ? ' (dry-run)' : ''}`);
   if (isWin) {
     console.log(`[Publish] Windows 更新检查: ${BASE_URL}/updates/win/latest.yml`);
   }

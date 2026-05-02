@@ -10,14 +10,21 @@
  *   main.js (~180 行) → Managers → IPC 模块 → 平台抽象层
  */
 
-const { app, BrowserWindow, screen, ipcMain, shell, dialog, globalShortcut } = require('electron');
+const { app, BrowserWindow, screen, ipcMain, dialog, globalShortcut } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
 const platform = require('./main/platform');
 const { initSync, getAuth, getEngine } = require('./main/sync');
-const { cleanupLinkCache, fetchPage, fetchRenderedTitle } = require('./main/utils/link-preview');
+const { cleanupLinkCache } = require('./main/utils/link-preview');
+const { registerStoreIpcHandlers } = require('./main/ipc/store');
+const { registerFilesIpcHandlers } = require('./main/ipc/files');
+const { registerWindowIpcHandlers } = require('./main/ipc/window');
+const { registerLinkPreviewIpcHandlers } = require('./main/ipc/link-preview');
+const { registerShortcutsIpcHandlers } = require('./main/ipc/shortcuts');
+const { registerDockIpcHandlers } = require('./main/ipc/dock');
+const { registerAutolaunchIpcHandlers } = require('./main/ipc/autolaunch');
 const { registerDataIpcHandlers } = require('./main/ipc/data');
 const { registerSyncIpcHandlers } = require('./main/ipc/sync');
 const { registerUpdaterIpcHandlers } = require('./main/ipc/updater');
@@ -86,238 +93,13 @@ function getDockManager() {
 
 // ========== IPC 处理器注册 ==========
 function registerIpcHandlers() {
-  // store:get / store:set — 使用 StoreManager
-  ipcMain.handle('store:get', (_event, key, defaultValue) => {
-    if (key === 'aiSettings') {
-      return storeManager.getAiSettings();
-    }
-    return storeManager.get(key, defaultValue);
-  });
-
-  ipcMain.handle('store:set', (_event, key, value) => {
-    if (key === 'aiSettings') {
-      storeManager.setAiSettings(value);
-    } else {
-      storeManager.set(key, value);
-    }
-    const engine = getEngine();
-    if (engine) engine.onStoreChanged(key);
-  });
-
-  // open-folder
-  ipcMain.handle('open-folder', async (_event, folderPath, storeKey) => {
-    try {
-      await shell.openPath(folderPath);
-      const key = storeKey || 'recentFolders';
-      const recent = storeManager.get(key, []);
-      const filtered = recent.filter(r => r.path !== folderPath);
-      filtered.unshift({ path: folderPath, timestamp: Date.now() });
-      storeManager.set(key, filtered.slice(0, 15));
-    } catch (err) {
-      dialog.showErrorBox('打开文件夹失败', err.message);
-    }
-  });
-
-  // get-screen-info
-  ipcMain.handle('get-screen-info', () => {
-    return screen.getAllDisplays().map(d => ({
-      id: d.id,
-      bounds: d.bounds,
-      workArea: d.workArea,
-      size: d.size,
-      scaleFactor: d.scaleFactor,
-    }));
-  });
-
-  // get-front-windows
-  ipcMain.handle('get-front-windows', async () => {
-    try {
-      const winInfo = await platform.windowInfo.getForegroundWindow();
-      if (!winInfo) return [];
-      const chatApps = ['WeChat', 'QQ', 'Feishu', 'Lark', 'DingTalk', 'WeCom', 'TIM', 'Telegram'];
-      const isChatApp = chatApps.some(a => winInfo.processName?.toLowerCase().includes(a.toLowerCase()));
-      return [{ title: winInfo.title, processName: winInfo.processName, rect: winInfo.rect, isChatApp }];
-    } catch (err) {
-      console.log('[FrontWindow] 获取失败:', err.message);
-      return [];
-    }
-  });
-
-  // get-desktop-files
-  ipcMain.handle('get-desktop-files', async () => {
-    try {
-      const desktopPath = app.getPath('desktop');
-      const entries = await fs.promises.readdir(desktopPath, { withFileTypes: true });
-      const files = [];
-      for (const entry of entries) {
-        const fullPath = path.join(desktopPath, entry.name);
-        try {
-          const stat = await fs.promises.stat(fullPath);
-          files.push({ name: entry.name, path: fullPath, isDirectory: entry.isDirectory(), mtime: stat.mtimeMs });
-        } catch { /* 跳过无法访问的文件 */ }
-      }
-      files.sort((a, b) => b.mtime - a.mtime);
-      return files.slice(0, 20);
-    } catch (err) {
-      dialog.showErrorBox('扫描桌面失败', err.message);
-      return [];
-    }
-  });
-
-  // move-files
-  ipcMain.handle('move-files', async (event, fromPaths, toDir) => {
-    const { response } = await dialog.showMessageBox(getMainWindow(), {
-      type: 'question',
-      buttons: ['确认移动', '取消'],
-      defaultId: 1,
-      title: '确认文件移动',
-      message: `即将移动 ${fromPaths.length} 个文件到:\n${toDir}\n\n请确认操作。`,
-    });
-    if (response !== 0) return { success: false, cancelled: true };
-
-    const results = [];
-    for (const src of fromPaths) {
-      try {
-        const dest = path.join(toDir, path.basename(src));
-        await fs.promises.copyFile(src, dest);
-        await fs.promises.unlink(src);
-        results.push({ file: src, success: true });
-      } catch (err) {
-        results.push({ file: src, success: false, error: err.message });
-      }
-    }
-    return { success: true, results };
-  });
-
-  // show-error / close-app
-  ipcMain.handle('show-error', (_event, title, content) => dialog.showErrorBox(title, content));
-  ipcMain.handle('close-app', () => app.quit());
-
-  // resize-window
-  ipcMain.handle('resize-window', (_event, newWidth) => {
-    const win = getMainWindow();
-    if (!win || win.isDestroyed()) return;
-    const w = Math.max(280, Math.min(600, newWidth));
-    dockManager.dockExpandedWidth = w;
-    const screenW = screen.getPrimaryDisplay().size.width;
-    storeManager.set('windowWidthPercent', Math.round((w / screenW) * 100));
-    if (!dockManager.dockExpanded) dockManager.expand('resize-window');
-    else dockManager.positionWindow(true);
-    return w;
-  });
-
-  // get-window-width
-  ipcMain.handle('get-window-width', () => {
-    const win = getMainWindow();
-    return win && !win.isDestroyed() ? win.getSize()[0] : 350;
-  });
-
-  // open-external
-  ipcMain.handle('open-external', async (_event, url) => {
-    try { await shell.openExternal(url); } catch (err) { console.error('[OpenExternal] 失败:', err); }
-  });
-
-  // fetch-link-preview
-  ipcMain.handle('fetch-link-preview', async (_event, url) => {
-    const cacheKey = require('crypto').createHash('md5').update(url).digest('hex');
-    const cached = storeManager.get(`linkCache.${cacheKey}`, null);
-    if (cached && (Date.now() - cached.timestamp < 24 * 60 * 60 * 1000)) {
-      return { ...cached, cached: true };
-    }
-    const timeoutResult = { title: null, favicon: null, description: null, source: 'timeout', error: 'TIMEOUT' };
-    try {
-      const result = await Promise.race([
-        fetchPage(url),
-        new Promise(resolve => setTimeout(() => resolve(timeoutResult), 3000)),
-      ]);
-      if (result.title && !result.error) {
-        storeManager.set(`linkCache.${cacheKey}`, { ...result, timestamp: Date.now() });
-      }
-      if (Math.random() < 0.1) cleanupLinkCache(storeManager);
-      return result;
-    } catch {
-      return timeoutResult;
-    }
-  });
-
-  // fetch-rendered-title
-  ipcMain.handle('fetch-rendered-title', async (_event, url) => {
-    const cacheKey = require('crypto').createHash('md5').update(`render:${url}`).digest('hex');
-    const cached = storeManager.get(`linkCache.${cacheKey}`, null);
-    if (cached && (Date.now() - cached.timestamp < 24 * 60 * 60 * 1000)) {
-      return { ...cached, cached: true };
-    }
-    const result = await fetchRenderedTitle(url);
-    if (result.title) {
-      storeManager.set(`linkCache.${cacheKey}`, { ...result, timestamp: Date.now() });
-    }
-    return result;
-  });
-
-  // shortcut — 委托给 ShortcutManager
-  ipcMain.handle('register-shortcut', (_event, accelerator) => {
-    const normalized = platform.shortcuts.normalizeShortcut(accelerator);
-    return shortcutManager.register(normalized, () => {
-      const win = getMainWindow();
-      if (win && !win.isDestroyed()) win.webContents.send('shortcut-triggered');
-    });
-  });
-  ipcMain.handle('unregister-shortcut', () => shortcutManager.unregister());
-  ipcMain.handle('register-pin-shortcut', (_event, accelerator) => {
-    const normalized = platform.shortcuts.normalizeShortcut(accelerator);
-    return shortcutManager.registerPin(normalized, () => {
-      const win = getMainWindow();
-      if (win && !win.isDestroyed()) win.webContents.send('pin-shortcut-triggered');
-    });
-  });
-  ipcMain.handle('unregister-pin-shortcut', () => shortcutManager.unregisterPin());
-
-  // Dock 控制 — 委托给 DockManager
-  ipcMain.handle('dock:pin', () => {
-    dockManager.dockPinned = true;
-    storeManager.set('dockPinned', true);
-    if (!dockManager.dockExpanded) dockManager.expand('pin');
-    console.log('[Dock] 已锁定');
-    return { success: true };
-  });
-  ipcMain.handle('dock:unpin', () => {
-    dockManager.dockPinned = false;
-    storeManager.set('dockPinned', false);
-    console.log('[Dock] 已解锁');
-    return { success: true };
-  });
-  ipcMain.handle('dock:toggle-pin', () => {
-    dockManager.dockPinned = !dockManager.dockPinned;
-    storeManager.set('dockPinned', dockManager.dockPinned);
-    if (dockManager.dockPinned && !dockManager.dockExpanded) dockManager.expand('pin');
-    console.log(`[Dock] 锁定状态: ${dockManager.dockPinned}`);
-    return { pinned: dockManager.dockPinned };
-  });
-  ipcMain.handle('dock:expand', (_event, delay) => {
-    dockManager.expand('外部请求');
-    if (delay && delay > 0) {
-      setTimeout(() => {
-        if (!dockManager.dockPinned && dockManager.dockedEdge !== null) {
-          dockManager.collapse(`延时${delay}ms 后收起`);
-        }
-      }, delay);
-    }
-    return { success: true };
-  });
-  ipcMain.handle('dock:set-interacting', () => ({ success: true }));
-  ipcMain.handle('dock:get-state', () => dockManager.getState());
-  ipcMain.handle('dock:get-edge', () => ({ dockedEdge: dockManager.dockedEdge, dockBounds: dockManager.dockBounds }));
-
-  // auto-launch
-  ipcMain.handle('get-auto-launch', () => storeManager.get('autoLaunch', false));
-  ipcMain.handle('set-auto-launch', (_event, enabled) => {
-    storeManager.set('autoLaunch', !!enabled);
-    app.setLoginItemSettings({ openAtLogin: !!enabled });
-    console.log(`[AutoLaunch] 开机自启设置为: ${!!enabled}`);
-    return { success: true };
-  });
-
-  // 数据/同步/更新 IPC
+  registerStoreIpcHandlers({ storeManager, getEngine });
+  registerFilesIpcHandlers({ storeManager, getMainWindow, platform });
+  registerWindowIpcHandlers({ getMainWindow, dockManager, storeManager });
+  registerLinkPreviewIpcHandlers({ storeManager });
+  registerShortcutsIpcHandlers({ shortcutManager, getMainWindow, platform });
+  registerDockIpcHandlers({ dockManager, storeManager });
+  registerAutolaunchIpcHandlers({ storeManager });
   registerDataIpcHandlers({
     store: storeManager,
     getMainWindow,
@@ -399,11 +181,9 @@ app.whenReady().then(async () => {
     const { autoUpdater: updater } = require('electron-updater');
     autoUpdater = updater;
     const platformDir = process.platform === 'darwin' ? 'mac' : 'win';
-    autoUpdater.setFeedURL({
-      provider: 'generic',
-      url: `https://ds-update-1420931574.cos.ap-guangzhou.myqcloud.com/updates/${platformDir}`,
-    });
-    console.log(`[AutoUpdate] 更新源已设置: /updates/${platformDir}/`);
+    const feedUrl = `https://ds-update-1420931574.cos.ap-guangzhou.myqcloud.com/updates/${platformDir}`;
+    autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl });
+    console.log(`[AutoUpdate] 平台: ${process.platform}, 更新源: ${feedUrl}`);
 
     autoUpdater.on('checking-for-update', () => {
       console.log('[AutoUpdate] 正在检查更新...');
@@ -434,9 +214,22 @@ app.whenReady().then(async () => {
       if (win && !win.isDestroyed()) win.webContents.send('update:status', { status: 'downloaded', version: info.version });
     });
     autoUpdater.on('error', (err) => {
+      let message = err.message;
+      let status = 'error';
+      // 增强错误分类，给渲染进程更明确的提示
+      if (message.includes('404') || message.includes('Not Found')) {
+        message = '未找到更新文件（404），请稍后再试或前往官网手动下载。';
+        status = 'not-found';
+      } else if (message.includes('net::ERR') || message.includes('network')) {
+        message = '网络连接失败，请检查网络后重试。';
+        status = 'network-error';
+      } else if (message.includes('certificate') || message.includes('SSL')) {
+        message = '更新服务器证书错误，请检查系统时间或网络环境。';
+        status = 'ssl-error';
+      }
       console.error('[AutoUpdate] 错误:', err.message);
       const win = getMainWindow();
-      if (win && !win.isDestroyed()) win.webContents.send('update:status', { status: 'error', error: err.message });
+      if (win && !win.isDestroyed()) win.webContents.send('update:status', { status, error: message });
     });
 
     setTimeout(() => {
