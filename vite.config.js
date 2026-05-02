@@ -9,6 +9,7 @@ export default defineConfig({
   plugins: [react()],
   define: {
     __APP_VERSION__: JSON.stringify(packageJson.version),
+    __VERIFY_API_URL__: JSON.stringify(process.env.VERIFY_API_URL || ''),
   },
   // 开发模式下渲染进程构建配置
   root: '.',                // 项目根目录

@@ -3,6 +3,11 @@ import { Cloud, CloudOff, RotateCw, LogOut, User, AlertCircle, CheckCircle, Mail
 
 const api = window.desktopAPI;
 
+// 腾讯云 CloudBase 云函数 URL（部署后填入）
+// 示例: 'https://ds-dev-d9g28xlrgd2600837-xxx.ap-guangzhou.app.tcloudbase.com/sendVerifyCode'
+const VERIFY_API_URL =
+  typeof __VERIFY_API_URL__ !== 'undefined' ? __VERIFY_API_URL__ : '';
+
 export default function SyncPanel() {
   const [status, setStatus] = useState({ isLoggedIn: false });
   const [syncing, setSyncing] = useState(false);
@@ -75,7 +80,19 @@ export default function SyncPanel() {
 
     setSendingCode(true);
     try {
-      const result = await api.syncSendCode(email);
+      let result;
+      if (VERIFY_API_URL) {
+        // 云函数模式（推荐）：24h 在线，不依赖本地电脑
+        const resp = await fetch(VERIFY_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        result = await resp.json();
+      } else {
+        // 本地回退模式：依赖 Electron 主进程运行
+        result = await api.syncSendCode(email);
+      }
       if (result.success) {
         showMsg(result.message || '验证码已发送', 'success');
         startCountdown(60);

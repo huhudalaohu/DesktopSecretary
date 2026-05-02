@@ -5,12 +5,13 @@
 const { ipcMain } = require('electron');
 
 function registerSyncIpcHandlers({ getAuth, getEngine }) {
-  /** sync:sendCode — 发送注册验证码 */
+  /** sync:sendCode — 发送注册验证码（已弃用，改用 CloudBase 云函数） */
   ipcMain.handle('sync:sendCode', async (_event, email) => {
     try {
       const auth = getAuth();
       if (!auth) throw new Error('同步模块未初始化');
       if (!auth.verify) throw new Error('验证码模块未初始化');
+      console.warn('[Sync] sync:sendCode 已弃用，建议迁移到 CloudBase 云函数');
       return await auth.verify.sendCode(email.trim().toLowerCase());
     } catch (err) {
       return { success: false, error: err.message };
