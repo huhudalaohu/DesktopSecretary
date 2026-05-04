@@ -82,20 +82,45 @@ function getCredentials() {
 // ========== COS 工具函数 ==========
 
 function uploadFile(cos, key, filePath) {
+  const size = fs.statSync(filePath).size;
+  const sizeMB = (size / 1024 / 1024).toFixed(1);
   return new Promise((resolve, reject) => {
-    cos.putObject(
-      {
-        Bucket: BUCKET,
-        Region: REGION,
-        Key: key,
-        Body: fs.createReadStream(filePath),
-        ContentLength: fs.statSync(filePath).size,
-      },
-      (err, data) => {
-        if (err) reject(err);
-        else resolve(data);
-      }
-    );
+    // 大于 50MB 的文件使用分片上传，避免超时
+    if (size > 50 * 1024 * 1024) {
+      console.log(`[Publish] 分片上传 ${key} (${sizeMB}MB)...`);
+      cos.sliceUploadFile(
+        {
+          Bucket: BUCKET,
+          Region: REGION,
+          Key: key,
+          FilePath: filePath,
+          onProgress: (progressData) => {
+            const pct = Math.round(progressData.percent * 100);
+            if (pct % 10 === 0) {
+              console.log(`[Publish] ${key}: ${pct}%`);
+            }
+          },
+        },
+        (err, data) => {
+          if (err) reject(err);
+          else resolve(data);
+        }
+      );
+    } else {
+      cos.putObject(
+        {
+          Bucket: BUCKET,
+          Region: REGION,
+          Key: key,
+          Body: fs.createReadStream(filePath),
+          ContentLength: size,
+        },
+        (err, data) => {
+          if (err) reject(err);
+          else resolve(data);
+        }
+      );
+    }
   });
 }
 
