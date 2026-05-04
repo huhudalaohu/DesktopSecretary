@@ -31,8 +31,6 @@ class WindowManager {
       y: initialBounds.y,
       width: initialBounds.width,
       height: initialBounds.height,
-      minWidth: 280,
-      minHeight: 400,
       resizable: dock.dockedEdge === null,
       webPreferences: {
         preload: path.join(__dirname, '..', '..', 'preload.js'),

@@ -285,7 +285,15 @@ app.whenReady().then(async () => {
     }
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
+      const win = getMainWindow();
+      if (win && !win.isDestroyed()) {
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+        if (!dockManager.dockExpanded && dockManager.dockedEdge !== null) {
+          dockManager.expand('activate');
+        }
+      } else if (BrowserWindow.getAllWindows().length === 0) {
         windowManager.createWindow();
       }
     });
@@ -296,6 +304,10 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => {
+  if (windowManager) windowManager.setQuitting(true);
 });
 
 app.on('will-quit', () => {
