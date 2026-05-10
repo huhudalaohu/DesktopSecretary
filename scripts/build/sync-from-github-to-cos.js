@@ -179,6 +179,7 @@ async function main() {
 
     const files = assets.filter(function(a) {
       return a.name.endsWith('.exe') ||
+             a.name.endsWith('.exe.blockmap') ||
              a.name.endsWith('.zip') ||
              a.name.endsWith('.dmg') ||
              a.name === 'latest-mac.yml' ||
@@ -191,13 +192,17 @@ async function main() {
       let cosKey;
       if (file.name === 'latest.yml') cosKey = 'updates/win/latest.yml';
       else if (file.name === 'latest-mac.yml') cosKey = 'updates/mac/latest-mac.yml';
-      else if (file.name.endsWith('.exe')) cosKey = 'updates/win/' + file.name;
+      else if (file.name.endsWith('.exe') || file.name.endsWith('.exe.blockmap')) cosKey = 'updates/win/' + file.name;
       else cosKey = 'updates/mac/' + file.name;
 
-      const exists = await checkCosFileExists(cos, cosKey);
-      if (exists) {
-        console.log('[Sync] 跳过（已存在）: ' + cosKey);
-        continue;
+      // yml 元数据每次发版必须覆盖（文件名不变但内容是新版）
+      const isMetaFile = file.name === 'latest.yml' || file.name === 'latest-mac.yml';
+      if (!isMetaFile) {
+        const exists = await checkCosFileExists(cos, cosKey);
+        if (exists) {
+          console.log('[Sync] 跳过（已存在）: ' + cosKey);
+          continue;
+        }
       }
 
       const localPath = path.join(tmpDir, file.name);

@@ -203,6 +203,18 @@ node scripts/build/cleanup-cos.js
 - **会不会出 bug**:不会。electron-builder 自己生成 yml 时用的是真实文件名,所以名字不一致没问题
 - **但是**:如果你手写 yml 或者写脚本拼文件名,要记住这两个命名规则不同,别想当然
 
+### 坑 7: sync 脚本 dedup 把 yml 也跳过了 → COS 上的 yml 永远是旧版
+- **症状**:sync 完成日志里看到 `[Sync] 跳过（已存在）: updates/mac/latest-mac.yml`,客户端拉到的 yml 永远是旧版本号
+- **根因**:`checkCosFileExists` 对所有文件统一处理,但 yml 文件名不变(`latest.yml` / `latest-mac.yml`),内容每次新版必变 → dedup 永远命中,新内容永远上不去
+- **修复**:在 [sync-from-github-to-cos.js](../scripts/build/sync-from-github-to-cos.js) 里**强制覆盖** yml,不走 dedup
+- **教训**:**dedup 必须按"内容是否会变"来判断,而不是统一一刀切**。yml 类元数据 = 总会变 = 必须覆盖;安装包 = 内容由文件名 + 版本号决定 = 可以 dedup
+
+### 坑 8: blockmap 没被同步 → Windows 自动更新走全量下载
+- **症状**:Windows 客户端检测到新版后,差分更新失败,回落到全量下载安装包(85MB+)
+- **根因**:sync 脚本的过滤器只匹配 `.exe / .zip / .dmg / latest*.yml`,**漏了 `.exe.blockmap`**;而且 cosKey 推断也只看 `endsWith('.exe')`,blockmap 即使被同步也会跑去 mac 目录
+- **修复**:过滤器加上 `.endsWith('.exe.blockmap')`,cosKey 推断同步加上 blockmap 判断
+- **教训**:发版前用第 5 节"验证清单"过一遍,curl 检查 COS 上每类文件都齐全
+
 ---
 
 ## 7. Memory 提示给未来的 Claude
