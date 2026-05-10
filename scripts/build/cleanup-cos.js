@@ -1,100 +1,164 @@
 /**
- * COS 清理脚本 — 删除 updates/ 根目录下错误残留的 Windows 安装包和 latest.yml
+ * DesktopSecretary — COS 旧版本归档清理脚本
+ *
+ * 扫描 updates/{version}/ 归档目录，保留最近 N 个版本，删除其余。
+ * 不影响 updates/win/ 和 updates/mac/ 下的最新版本文件。
  *
  * 用法：
- *   node scripts/build/cleanup-cos.js --dry-run    # 预览将要删除的文件
- *   node scripts/build/cleanup-cos.js              # 执行删除
+ *   node scripts/build/cleanup-cos.js              保留最近 5 个版本，删除其余归档
+ *   node scripts/build/cleanup-cos.js --keep=3     保留最近 3 个版本
+ *   node scripts/build/cleanup-cos.js --dry-run    预览，不实际删除
  */
 
-const fs = require('fs');
-const path = require('path');
+require('dotenv').config();
+
 const COS = require('cos-nodejs-sdk-v5');
 
 const BUCKET = 'ds-update-1420931574';
 const REGION = 'ap-guangzhou';
 
-const KEYS_TO_DELETE = [
-  'updates/latest.yml',
-  'updates/DesktopSecretary Setup 1.0.6.exe',
-  'updates/DesktopSecretary Setup 1.0.6.exe.blockmap',
-  'updates/DesktopSecretary Setup 1.0.7.exe',
-  'updates/DesktopSecretary Setup 1.0.7.exe.blockmap',
-];
+// ========== 解析命令行参数 ==========
+const isDryRun = process.argv.includes('--dry-run');
+const keepArg = process.argv.find((arg) => arg.startsWith('--keep='));
+const keepCount = keepArg ? parseInt(keepArg.split('=')[1], 10) : 5;
 
-function getCredentials() {
-  const envId = process.env.TENCENT_SECRET_ID;
-  const envKey = process.env.TENCENT_SECRET_KEY;
-  if (envId && envKey) {
-    return { secretId: envId, secretKey: envKey };
+// ========== Semver 比较 ==========
+function compareVersion(a, b) {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na !== nb) return na - nb;
   }
-
-  const configPath = path.join(__dirname, '..', '..', 'config', 'publish-config.json');
-  if (fs.existsSync(configPath)) {
-    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    if (config.secretId && config.secretKey) {
-      return { secretId: config.secretId, secretKey: config.secretKey };
-    }
-  }
-
-  throw new Error(
-    '未找到腾讯云密钥，请配置 TENCENT_SECRET_ID / TENCENT_SECRET_KEY 或 config/publish-config.json'
-  );
+  return 0;
 }
 
-async function main() {
-  const isDryRun = process.argv.includes('--dry-run');
-  const { secretId, secretKey } = getCredentials();
-  const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
+// ========== COS 工具函数 ==========
 
-  console.log(`[Cleanup] 模式: ${isDryRun ? '预览 (dry-run)' : '执行删除'}`);
-  console.log(`[Cleanup] 将要处理的 Key 数量: ${KEYS_TO_DELETE.length}\n`);
-
-  // 先验证这些 Key 是否存在
-  const existingKeys = [];
-  for (const key of KEYS_TO_DELETE) {
-    try {
-      await new Promise((resolve, reject) => {
-        cos.headObject({ Bucket: BUCKET, Region: REGION, Key: key }, (err, data) => {
+/**
+ * 列出 updates/ 下的版本号归档目录（如 1.0.12、1.0.11）
+ * 使用 Delimiter 高效获取，不遍历所有对象
+ */
+async function listVersionDirs(cos) {
+  const versions = [];
+  let marker = null;
+  while (true) {
+    const res = await new Promise((resolve, reject) => {
+      cos.getBucket(
+        {
+          Bucket: BUCKET,
+          Region: REGION,
+          Prefix: 'updates/',
+          Delimiter: '/',
+          MaxKeys: 1000,
+          Marker: marker,
+        },
+        (err, data) => {
           if (err) reject(err);
           else resolve(data);
-        });
-      });
-      existingKeys.push(key);
-      console.log(`  [存在] ${key}`);
-    } catch {
-      console.log(`  [不存在/跳过] ${key}`);
+        }
+      );
+    });
+
+    for (const cp of res.CommonPrefixes || []) {
+      const prefix = cp.Prefix;
+      // 只匹配版本号目录，排除 win/ mac/
+      const match = prefix.match(/^updates\/(\d+\.\d+\.\d+)\/$/);
+      if (match) {
+        versions.push(match[1]);
+      }
     }
+
+    if (!res.IsTruncated) break;
+    marker = res.NextMarker;
   }
+  return versions;
+}
 
-  if (existingKeys.length === 0) {
-    console.log('\n[Cleanup] 没有需要删除的文件。');
-    return;
-  }
-
-  console.log(`\n[Cleanup] 实际存在且将要删除的 Key 数量: ${existingKeys.length}`);
-
-  if (isDryRun) {
-    console.log('[Cleanup] dry-run 模式，未执行删除。');
-    return;
-  }
-
-  // 执行删除
-  console.log('[Cleanup] 开始删除...');
-  for (const key of existingKeys) {
-    try {
-      await new Promise((resolve, reject) => {
-        cos.deleteObject({ Bucket: BUCKET, Region: REGION, Key: key }, (err) => {
+/**
+ * 列出指定前缀下的所有对象
+ */
+async function listObjectsByPrefix(cos, prefix) {
+  const keys = [];
+  let marker = null;
+  while (true) {
+    const res = await new Promise((resolve, reject) => {
+      cos.getBucket(
+        { Bucket: BUCKET, Region: REGION, Prefix: prefix, MaxKeys: 1000, Marker: marker },
+        (err, data) => {
           if (err) reject(err);
-          else resolve();
-        });
-      });
-      console.log(`  [已删除] ${key}`);
-    } catch (err) {
-      console.error(`  [删除失败] ${key}: ${err.message}`);
+          else resolve(data);
+        }
+      );
+    });
+    for (const obj of res.Contents || []) {
+      keys.push(obj.Key);
+    }
+    if (!res.IsTruncated) break;
+    marker = res.NextMarker;
+  }
+  return keys;
+}
+
+async function deleteObject(cos, key) {
+  return new Promise((resolve, reject) => {
+    cos.deleteObject({ Bucket: BUCKET, Region: REGION, Key: key }, (err) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+// ========== 主流程 ==========
+async function main() {
+  const secretId = process.env.TENCENT_SECRET_ID;
+  const secretKey = process.env.TENCENT_SECRET_KEY;
+
+  if (!secretId || !secretKey) {
+    throw new Error('未找到腾讯云密钥，请配置环境变量 TENCENT_SECRET_ID 和 TENCENT_SECRET_KEY');
+  }
+
+  const cos = new COS({ SecretId: secretId, SecretKey: secretKey });
+
+  console.log(`[Cleanup] 开始清理 COS 旧版本归档${isDryRun ? ' (dry-run)' : ''}`);
+  console.log(`[Cleanup] 保留最近 ${keepCount} 个版本归档`);
+  console.log(`[Cleanup] 不影响 updates/win/ 和 updates/mac/ 下的最新版本文件\n`);
+
+  // 获取所有版本号目录
+  const versions = (await listVersionDirs(cos)).sort(compareVersion).reverse();
+  console.log(`[Cleanup] 发现 ${versions.length} 个版本归档: ${versions.join(', ')}`);
+
+  if (versions.length <= keepCount) {
+    console.log('[Cleanup] 版本数量未超过保留上限，无需清理');
+    return;
+  }
+
+  const versionsToDelete = versions.slice(keepCount);
+  console.log(`[Cleanup] 将删除 ${versionsToDelete.length} 个旧版本归档: ${versionsToDelete.join(', ')}`);
+
+  let deletedCount = 0;
+  for (const ver of versionsToDelete) {
+    const prefix = `updates/${ver}/`;
+    const keysToDelete = await listObjectsByPrefix(cos, prefix);
+
+    if (keysToDelete.length === 0) continue;
+
+    console.log(`\n[Cleanup] 版本 ${ver}: ${keysToDelete.length} 个文件`);
+    for (const key of keysToDelete) {
+      if (isDryRun) {
+        console.log(`  [dry-run] 将删除: ${key}`);
+      } else {
+        await deleteObject(cos, key);
+        console.log(`  [已删除] ${key}`);
+      }
+      deletedCount++;
     }
   }
 
-  console.log('\n[Cleanup] 清理完成。');
+  console.log('');
+  console.log(`[Cleanup] 完成${isDryRun ? ' (dry-run)' : ''}`);
+  console.log(`[Cleanup] 共${isDryRun ? '预览' : '删除'} ${deletedCount} 个文件，保留 ${Math.min(versions.length, keepCount)} 个版本归档`);
 }
 
 main().catch((err) => {

@@ -3,11 +3,17 @@
  * 用法：node scripts/build/sync-from-github-to-cos.js --version=1.0.12
  */
 
+require('dotenv').config();
+
 const https = require('https');
 const http = require('http');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 const COS = require('cos-nodejs-sdk-v5');
 const fs = require('fs');
 const path = require('path');
+
+const PROXY_URL = process.env.PROXY_URL || null;
+const proxyAgent = PROXY_URL ? new HttpsProxyAgent(PROXY_URL) : null;
 
 const CONFIG = {
   owner: 'huhudalaohu',
@@ -16,25 +22,70 @@ const CONFIG = {
   region: 'ap-guangzhou',
 };
 
-function downloadFile(url, destPath) {
+function _downloadFile(url, destPath) {
   return new Promise((resolve, reject) => {
     const client = url.startsWith('https:') ? https : http;
     const file = fs.createWriteStream(destPath);
 
-    client.get(url, { headers: { 'User-Agent': 'DesktopSecretary-Sync' } }, (res) => {
+    const options = { headers: { 'User-Agent': 'DesktopSecretary-Sync' } };
+    if (proxyAgent) options.agent = proxyAgent;
+
+    client.get(url, options, (res) => {
       if (res.statusCode === 301 || res.statusCode === 302) {
         console.log('[Sync] 跟随重定向: ' + res.headers.location);
-        downloadFile(res.headers.location, destPath).then(resolve).catch(reject);
+        _downloadFile(res.headers.location, destPath).then(resolve).catch(reject);
         return;
       }
       if (res.statusCode !== 200) {
         reject(new Error('下载失败: ' + res.statusCode));
         return;
       }
+
+      const totalSize = parseInt(res.headers['content-length'], 10) || 0;
+      let downloaded = 0;
+      let lastPercent = -1;
+
+      res.on('data', (chunk) => {
+        downloaded += chunk.length;
+        if (totalSize > 0) {
+          const percent = Math.floor((downloaded / totalSize) * 100);
+          if (percent !== lastPercent) {
+            process.stdout.write('\r[Sync] 下载进度: ' + percent + '% (' + (downloaded / 1024 / 1024).toFixed(1) + 'MB / ' + (totalSize / 1024 / 1024).toFixed(1) + 'MB)');
+            lastPercent = percent;
+          }
+        }
+      });
+
       res.pipe(file);
-      file.on('finish', () => { file.close(); resolve(); });
+      file.on('finish', () => {
+        process.stdout.write('\n');
+        file.close();
+        resolve();
+      });
     }).on('error', reject);
   });
+}
+
+async function downloadFile(url, destPath) {
+  const MAX_RETRIES = 3;
+  for (let i = 0; i < MAX_RETRIES; i++) {
+    try {
+      if (i > 0) {
+        console.log('[Sync] 第 ' + (i + 1) + ' 次重试下载...');
+      }
+      await _downloadFile(url, destPath);
+      return;
+    } catch (err) {
+      if (fs.existsSync(destPath)) {
+        fs.unlinkSync(destPath);
+      }
+      if (i === MAX_RETRIES - 1) {
+        throw new Error('下载失败（已重试 ' + MAX_RETRIES + ' 次）: ' + err.message);
+      }
+      console.log('[Sync] 下载出错，3秒后重试: ' + err.message);
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
 }
 
 function uploadToCos(cos, key, filePath) {
@@ -48,6 +99,27 @@ function uploadToCos(cos, key, filePath) {
     }, (err, data) => {
       if (err) reject(err);
       else resolve(data);
+    });
+  });
+}
+
+function checkCosFileExists(cos, key) {
+  return new Promise((resolve) => {
+    cos.headObject({
+      Bucket: CONFIG.bucket,
+      Region: CONFIG.region,
+      Key: key,
+    }, (err, data) => {
+      if (err) {
+        if (err.statusCode === 404) {
+          resolve(false);
+        } else {
+          console.log('[Sync] 检查 COS 文件状态异常: ' + err.message);
+          resolve(false);
+        }
+      } else {
+        resolve(true);
+      }
     });
   });
 }
@@ -69,6 +141,9 @@ async function main() {
   });
 
   const tmpDir = path.join(__dirname, '..', '..', 'release', 'sync-tmp-' + version);
+  if (fs.existsSync(tmpDir)) {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
   fs.mkdirSync(tmpDir, { recursive: true });
 
   try {
@@ -76,7 +151,9 @@ async function main() {
     console.log('[Sync] 获取 Release: ' + apiUrl);
 
     const release = await new Promise((resolve, reject) => {
-      https.get(apiUrl, { headers: { 'User-Agent': 'DesktopSecretary-Sync' } }, (res) => {
+      const apiOptions = { headers: { 'User-Agent': 'DesktopSecretary-Sync' } };
+      if (proxyAgent) apiOptions.agent = proxyAgent;
+      https.get(apiUrl, apiOptions, (res) => {
         let data = '';
         res.on('data', chunk => data += chunk);
         res.on('end', () => {
@@ -89,8 +166,16 @@ async function main() {
       }).on('error', reject);
     });
 
+    if (release.message) {
+      throw new Error('GitHub API 错误: ' + release.message + (release.documentation_url ? ' (' + release.documentation_url + ')' : ''));
+    }
+
     const assets = release.assets || [];
     console.log('[Sync] Release 资产数: ' + assets.length);
+
+    if (assets.length === 0) {
+      throw new Error('该 Release 没有上传任何构建产物，请确认 GitHub Release 页面已有附件。');
+    }
 
     const files = assets.filter(function(a) {
       return a.name.endsWith('.exe') ||
@@ -103,15 +188,21 @@ async function main() {
     console.log('[Sync] 需要同步 ' + files.length + ' 个文件');
 
     for (const file of files) {
-      const localPath = path.join(tmpDir, file.name);
-      console.log('[Sync] 下载: ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(1) + 'MB)');
-      await downloadFile(file.browser_download_url, localPath);
-
       let cosKey;
       if (file.name === 'latest.yml') cosKey = 'updates/win/latest.yml';
       else if (file.name === 'latest-mac.yml') cosKey = 'updates/mac/latest-mac.yml';
       else if (file.name.endsWith('.exe')) cosKey = 'updates/win/' + file.name;
       else cosKey = 'updates/mac/' + file.name;
+
+      const exists = await checkCosFileExists(cos, cosKey);
+      if (exists) {
+        console.log('[Sync] 跳过（已存在）: ' + cosKey);
+        continue;
+      }
+
+      const localPath = path.join(tmpDir, file.name);
+      console.log('[Sync] 下载: ' + file.name + ' (' + (file.size / 1024 / 1024).toFixed(1) + 'MB)');
+      await downloadFile(file.browser_download_url, localPath);
 
       console.log('[Sync] 上传: ' + cosKey);
       await uploadToCos(cos, cosKey, localPath);
@@ -120,7 +211,7 @@ async function main() {
       console.log('[Sync] 完成: ' + file.name);
     }
 
-    fs.rmdirSync(tmpDir);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
     console.log('[Sync] 全部完成!');
 
   } catch (err) {

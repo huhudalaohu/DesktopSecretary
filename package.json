@@ -1,6 +1,6 @@
 {
   "name": "desktop-secretary",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "A glassmorphism desktop assistant pinned to the right side of your screen",
   "main": "main.js",
   "scripts": {
@@ -8,7 +8,9 @@
     "dev": "concurrently \"vite\" \"electron .\"",
     "build": "vite build",
     "dist": "npm run build && electron-builder",
-    "publish": "npm run dist && node scripts/build/publish.js"
+    "publish": "npm run dist && node scripts/build/publish.js",
+    "upload": "node scripts/build/publish.js",
+    "cleanup-cos": "node scripts/build/cleanup-cos.js"
   },
   "build": {
     "productName": "DesktopSecretary",
@@ -16,6 +18,12 @@
     "directories": {
       "output": "release"
     },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://ds-update-1420931574.cos.ap-guangzhou.myqcloud.com/updates/${os}"
+      }
+    ],
     "files": [
       "main.js",
       "preload.js",
@@ -109,6 +117,7 @@
     "dotenv": "^17.4.2",
     "electron": "^30.5.1",
     "electron-builder": "^26.8.1",
+    "https-proxy-agent": "^9.0.0",
     "playwright": "^1.59.1",
     "postcss": "^8.4.49",
     "react": "^18.3.1",

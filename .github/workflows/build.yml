@@ -5,9 +5,9 @@ on:
     branches: [master, main]
   pull_request:
     branches: [master, main]
-  workflow_dispatch:   # 手动触发：构建 + 上传 COS
+  workflow_dispatch:
   release:
-    types: [published] # 发布 Release 时自动构建并上传产物
+    types: [published]
 
 jobs:
   build:
@@ -45,7 +45,7 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npx electron-builder --mac --publish=never
 
-      # ========== 自动上传到 GitHub Release ==========
+      # ========== 上传到 GitHub Release（包含 latest*.yml 元数据，必须）==========
       - name: Upload Windows assets to Release
         if: matrix.os == 'windows-latest' && github.event_name == 'release'
         uses: softprops/action-gh-release@v2
@@ -53,6 +53,7 @@ jobs:
           files: |
             release/*.exe
             release/*.exe.blockmap
+            release/latest.yml
 
       - name: Upload macOS assets to Release
         if: matrix.os == 'macos-latest' && github.event_name == 'release'
@@ -61,29 +62,17 @@ jobs:
           files: |
             release/*.dmg
             release/*.zip
+            release/latest-mac.yml
 
-      # ========== 手动触发时发布到 COS ==========
-      - name: Publish to COS (Windows)
-        if: matrix.os == 'windows-latest' && github.event_name == 'workflow_dispatch'
-        env:
-          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
-          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
-        run: node scripts/build/publish.js --platform=win
-
-      - name: Publish to COS (macOS)
-        if: matrix.os == 'macos-latest' && github.event_name == 'workflow_dispatch'
-        env:
-          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
-          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
-        run: node scripts/build/publish.js --platform=mac
-
-      # ========== 构建产物归档（调试用）==========
+      # ========== 构建产物归档（调试用，可在 Actions 页面下载）==========
       - name: Upload Windows artifacts
         if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
           name: DesktopSecretary-Windows
-          path: release/*.exe
+          path: |
+            release/*.exe
+            release/latest.yml
 
       - name: Upload macOS artifacts
         if: matrix.os == 'macos-latest'
@@ -93,3 +82,4 @@ jobs:
           path: |
             release/*.dmg
             release/*.zip
+            release/latest-mac.yml
