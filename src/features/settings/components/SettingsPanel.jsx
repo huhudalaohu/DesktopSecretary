@@ -1,20 +1,19 @@
 import React from 'react';
 import SyncPanel from '../../sync/components/SyncPanel';
+import CreditsPanel from '../../credits/CreditsPanel';
 import ReminderLevelSettings from '../../reminders/components/ReminderLevelSettings';
-import { MODEL_PROVIDERS, PROVIDER_KEYS } from '../../../config/ai-config';
+import { AI_MODE_OPTIONS } from '../../../config/ai-config';
 import { CURRENT_APP_VERSION } from '../../../hooks/useAutoUpdate';
 import {
-  Key, Eye, EyeOff, ChevronDown, RotateCw, Download,
-  CheckCircle, ArrowUpCircle, AlertCircle,
+  RotateCw, Download, CheckCircle, ArrowUpCircle, AlertCircle,
 } from 'lucide-react';
 
 export default function SettingsPanel({
   panelRef,
   fontScale,
+  setFontScale,
   aiSettings,
   setAiSettings,
-  showKey,
-  setShowKey,
   editingShortcut,
   setEditingShortcut,
   shortcutInput,
@@ -51,8 +50,10 @@ export default function SettingsPanel({
   handleInstallUpdate,
   // external API
   api,
+  // 充值弹窗触发(模态框在 App.jsx 根级渲染,避免被 SettingsPanel 的 overflow 裁剪)
+  onOpenRecharge,
 }) {
-  const currentProvider = MODEL_PROVIDERS[aiSettings.provider];
+  const currentMode = aiSettings.mode || 'fast';
 
   return (
     <div
@@ -120,83 +121,43 @@ export default function SettingsPanel({
 
       <SyncPanel />
 
-      {/* ===== AI 配置 ===== */}
+      <CreditsPanel onOpenRecharge={onOpenRecharge} />
+
+      {/* ===== AI 配置(v2:平台垫付) ===== */}
       <section className="bg-white rounded-md p-2.5 space-y-2">
-        <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">AI 配置</h3>
+        <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">AI 模式</h3>
 
-        <div className="space-y-1">
-          <label className="text-[10px] text-gray-500">模型</label>
-          <div className="relative">
-            <select
-              value={aiSettings.provider}
-              onChange={(e) => setAiSettings({ ...aiSettings, provider: e.target.value })}
-              className="w-full px-2 py-1 text-[10px] rounded bg-white border border-[#E5E5E5] text-gray-800 outline-none appearance-none cursor-pointer"
-            >
-              {PROVIDER_KEYS.map((key) => (
-                <option key={key} value={key} className="bg-white text-gray-800">
-                  {MODEL_PROVIDERS[key].label}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={10} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-          </div>
+        <div className="text-[10px] text-gray-400 leading-relaxed">
+          AI 调用由平台统一垫付,按上游 token 用量扣积分。无需配置 API Key。
         </div>
 
-        <div className="space-y-1">
-          <label className="text-[10px] text-gray-500">
-            {aiSettings.provider === 'wenxin' ? 'Access Token' : 'API Key'}
-          </label>
-          <div className="relative">
-            <input
-              type={showKey ? 'text' : 'password'}
-              value={aiSettings.apiKey}
-              onChange={(e) => setAiSettings({ ...aiSettings, apiKey: e.target.value })}
-              placeholder={aiSettings.provider === 'wenxin' ? '输入 Access Token...' : '输入 API Key...'}
-              className="w-full px-2 py-1 text-[10px] rounded bg-white border border-[#E5E5E5] text-gray-800 placeholder-gray-300 outline-none focus:border-[#0099FF] pr-6"
-            />
+        <div className="flex gap-1">
+          {AI_MODE_OPTIONS.map((opt) => (
             <button
-              onClick={() => setShowKey(!showKey)}
-              className="absolute right-1 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"
+              key={opt.value}
+              onClick={() => setAiSettings({ ...aiSettings, mode: opt.value })}
+              className={`flex-1 py-1 rounded text-[10px] transition-colors ${
+                currentMode === opt.value
+                  ? 'bg-[#0099FF] text-white'
+                  : 'bg-[#F5F5F5] text-gray-500 hover:bg-[#EBEBEB]'
+              }`}
+              title={opt.desc}
             >
-              {showKey ? <EyeOff size={10} /> : <Eye size={10} />}
+              {opt.label}
             </button>
-          </div>
+          ))}
         </div>
-
-        {aiSettings.provider === 'custom' && (
-          <>
-            <div className="space-y-1">
-              <label className="text-[10px] text-gray-500">Base URL</label>
-              <input
-                value={aiSettings.customBaseUrl}
-                onChange={(e) => setAiSettings({ ...aiSettings, customBaseUrl: e.target.value })}
-                placeholder="https://api.example.com/v1"
-                className="w-full px-2 py-1 text-[10px] rounded bg-white border border-[#E5E5E5] text-gray-800 placeholder-gray-300 outline-none focus:border-[#0099FF]"
-              />
-            </div>
-            <div className="space-y-1">
-              <label className="text-[10px] text-gray-500">模型名称</label>
-              <input
-                value={aiSettings.customModel}
-                onChange={(e) => setAiSettings({ ...aiSettings, customModel: e.target.value })}
-                placeholder="输入模型名称..."
-                className="w-full px-2 py-1 text-[10px] rounded bg-white border border-[#E5E5E5] text-gray-800 placeholder-gray-300 outline-none focus:border-[#0099FF]"
-              />
-            </div>
-          </>
-        )}
 
         <div className="text-[9px] text-gray-400">
-          端点: {aiSettings.provider === 'custom' ? (aiSettings.customBaseUrl || '未设置') : currentProvider.baseUrl}
+          {AI_MODE_OPTIONS.find((o) => o.value === currentMode)?.desc}
         </div>
 
         {/* 保存 */}
         <div className="flex gap-1 pt-1">
           <button
             onClick={handleSaveSettings}
-            className="flex-1 py-1 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[10px] transition-colors flex items-center justify-center gap-1"
+            className="flex-1 py-1 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[10px] transition-colors"
           >
-            <Key size={10} />
             保存
           </button>
         </div>

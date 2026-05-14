@@ -1,11 +1,14 @@
 /**
- * 同步模块统一入口
+ * 同步模块统一入口(v2)
+ *
+ * v2 改动:
+ *   - 删除 VerifyCodeManager(验证码由 CloudBase 内置邮件服务接管)
+ *   - AuthManager 仅维护 uid session,不再做注册登录
  */
 
 const { AuthManager } = require('./auth');
 const { CloudStore } = require('./cloud');
 const { SyncEngine } = require('./engine');
-const { VerifyCodeManager } = require('./verify');
 
 let authManager = null;
 let syncEngine = null;
@@ -29,15 +32,14 @@ function initSync(store, tcbApp) {
 
   try {
     const cloudStore = new CloudStore(tcbApp);
-    const verifyManager = new VerifyCodeManager(cloudStore);
-    authManager = new AuthManager(cloudStore, store, verifyManager);
+    authManager = new AuthManager(store);
     syncEngine = new SyncEngine(store, cloudStore, authManager);
     initialized = true;
 
-    // 启动时如果已登录，处理旧数据迁移 + 自动拉取
+    // 启动时如果已有会话(渲染进程登录后会持久化),恢复 profile + 自动 pull
     const status = authManager.getStatus();
     if (status.isLoggedIn) {
-      // 旧数据迁移：老用户没有 profiles:{uid}: 归档，自动将当前顶层数据绑定
+      // 旧数据迁移:老用户没有 profiles:{uid}: 归档时,自动绑定当前顶层数据
       if (!syncEngine.profile.hasProfile(status.uid)) {
         console.log('[Profile] 检测到旧数据，自动迁移到账户:', status.uid);
         syncEngine.profile.bindCurrentDataToProfile(status.uid);
@@ -50,7 +52,7 @@ function initSync(store, tcbApp) {
         });
       }, 3000);
     } else {
-      // 未登录时，活跃 profile 设为 anonymous
+      // 未登录时,活跃 profile 设为 anonymous
       syncEngine.profile.activeUid = 'anonymous';
     }
 
@@ -74,9 +76,4 @@ module.exports = {
   initSync,
   getAuth,
   getEngine,
-  getVerify: () => {
-    const { getAuth } = require('./auth');
-    const auth = getAuth();
-    return auth ? auth.verify : null;
-  },
 };

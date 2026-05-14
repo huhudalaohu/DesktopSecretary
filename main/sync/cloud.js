@@ -1,44 +1,14 @@
 /**
- * CloudBase 数据库封装
- * 操作 users 和 userData 集合
+ * CloudBase 数据库封装(v2)
+ *
+ * v2 之后用户身份由 CloudBase 身份认证管理,本模块不再操作 users 集合,
+ * 只负责 userData 的读写(同步引擎使用)。
  */
 
 class CloudStore {
   constructor(tcbApp) {
     this.db = tcbApp.database();
-    this.users = this.db.collection('users');
     this.userData = this.db.collection('userData');
-    this.verifyCodes = this.db.collection('verifyCodes');
-  }
-
-  /**
-   * 创建用户
-   * @returns {Promise<string>} 新用户 uid
-   */
-  async createUser(username, passwordHash) {
-    const doc = {
-      username,
-      passwordHash,
-      createdAt: new Date(),
-      lastLoginAt: new Date(),
-    };
-    const res = await this.users.add(doc);
-    return res.id || (res.ids && res.ids[0]);
-  }
-
-  /**
-   * 根据用户名查找用户
-   */
-  async findUserByUsername(username) {
-    const { data } = await this.users.where({ username }).limit(1).get();
-    return data && data.length > 0 ? data[0] : null;
-  }
-
-  /**
-   * 更新最后登录时间
-   */
-  async updateLoginTime(uid) {
-    await this.users.doc(uid).update({ lastLoginAt: new Date() });
   }
 
   /**

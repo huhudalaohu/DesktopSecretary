@@ -1,29 +1,31 @@
 /**
- * 用户认证管理
- * 注册 / 登录 / 登出 / 会话保持
+ * 用户会话管理(v2)
+ *
+ * 注册/登录/验证码现在由渲染进程通过 @cloudbase/js-sdk 直接对接 CloudBase
+ * 身份认证服务完成,主进程不再做密码哈希、验证码核对等。
+ *
+ * 本模块只负责把 uid 维系到 electron-store(用于同步引擎切换 profile),
+ * 以及提供 getStatus 给 UI 查询。
+ *
+ * 渲染进程登录成功后通过 IPC `auth:setUid` 通知主进程,登出后通过
+ * `auth:clearUid` 通知。
  */
 
-const bcrypt = require('bcryptjs');
-const { CloudStore } = require('./cloud');
-const { VerifyCodeManager } = require('./verify');
-
-const SALT_ROUNDS = 10;
+const SESSION_KEY = 'syncSession';
 
 class AuthManager {
-  constructor(cloudStore, store, verifyManager) {
-    this.cloud = cloudStore;
+  constructor(store) {
     this.store = store;
-    this.verify = verifyManager;
     this.session = null;
     this._loadSession();
   }
 
   _loadSession() {
     try {
-      const saved = this.store.get('syncSession', null);
-      if (saved && saved.uid && saved.username) {
+      const saved = this.store.get(SESSION_KEY, null);
+      if (saved && saved.uid) {
         this.session = saved;
-        console.log('[Sync] 已恢复登录会话:', saved.username);
+        console.log('[Sync] 已恢复登录会话:', saved.username || saved.uid);
       }
     } catch {
       this.session = null;
@@ -32,10 +34,32 @@ class AuthManager {
 
   _saveSession() {
     if (this.session) {
-      this.store.set('syncSession', this.session);
+      this.store.set(SESSION_KEY, this.session);
     } else {
-      try { this.store.delete('syncSession'); } catch {}
+      try { this.store.delete(SESSION_KEY); } catch {}
     }
+  }
+
+  /**
+   * 渲染进程登录后调用,把 uid 持久化。
+   */
+  setSession({ uid, username }) {
+    if (!uid) throw new Error('uid 不能为空');
+    this.session = {
+      uid,
+      username: username || '',
+      loginAt: Date.now(),
+    };
+    this._saveSession();
+    console.log('[Sync] 已绑定用户:', this.session.username || uid);
+    return { success: true, uid, username: this.session.username };
+  }
+
+  clearSession() {
+    this.session = null;
+    this._saveSession();
+    console.log('[Sync] 已清除会话');
+    return { success: true };
   }
 
   getStatus() {
@@ -43,88 +67,9 @@ class AuthManager {
     return {
       isLoggedIn: true,
       uid: this.session.uid,
-      username: this.session.username,
+      username: this.session.username || '',
       loginAt: this.session.loginAt,
     };
-  }
-
-  _validateEmail(email) {
-    if (!email || typeof email !== 'string') {
-      throw new Error('邮箱不能为空');
-    }
-    const trimmed = email.trim().toLowerCase();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
-      throw new Error('邮箱格式不正确');
-    }
-    return trimmed;
-  }
-
-  _validatePassword(password) {
-    if (!password || typeof password !== 'string') {
-      throw new Error('密码不能为空');
-    }
-    if (password.length < 6) {
-      throw new Error('密码长度至少 6 位');
-    }
-    return password;
-  }
-
-  async register(username, password, code) {
-    const validEmail = this._validateEmail(username);
-    const validPass = this._validatePassword(password);
-
-    if (!code || typeof code !== 'string') {
-      throw new Error('请输入验证码');
-    }
-
-    // 校验验证码
-    if (this.verify) {
-      await this.verify.verifyCode(validEmail, code);
-    }
-
-    const existing = await this.cloud.findUserByUsername(validEmail);
-    if (existing) {
-      throw new Error('该邮箱已被注册');
-    }
-
-    const passwordHash = await bcrypt.hash(validPass, SALT_ROUNDS);
-    const uid = await this.cloud.createUser(validEmail, passwordHash);
-
-    this.session = { uid, username: validEmail, loginAt: Date.now() };
-    this._saveSession();
-
-    console.log('[Sync] 注册成功:', validEmail, uid);
-    return { success: true, uid, username: validEmail };
-  }
-
-  async login(username, password) {
-    const validEmail = this._validateEmail(username);
-    const validPass = this._validatePassword(password);
-
-    const user = await this.cloud.findUserByUsername(validEmail);
-    if (!user) {
-      throw new Error('邮箱或密码错误');
-    }
-
-    const valid = await bcrypt.compare(validPass, user.passwordHash);
-    if (!valid) {
-      throw new Error('邮箱或密码错误');
-    }
-
-    await this.cloud.updateLoginTime(user._id);
-
-    this.session = { uid: user._id, username: user.username, loginAt: Date.now() };
-    this._saveSession();
-
-    console.log('[Sync] 登录成功:', user.username);
-    return { success: true, uid: user._id, username: user.username };
-  }
-
-  async logout() {
-    this.session = null;
-    this._saveSession();
-    console.log('[Sync] 已登出');
-    return { success: true };
   }
 }
 

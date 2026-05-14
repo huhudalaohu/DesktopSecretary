@@ -236,21 +236,19 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   /** 获取存储统计 */
   getDataStats: () => ipcRenderer.invoke('data:stats'),
 
-  // ========== 云端同步 ==========
+  // ========== 云端同步(v2:身份由 CloudBase Auth 接管,主进程只维护 session)==========
 
-  /** 发送注册验证码 */
-  syncSendCode: (email) => ipcRenderer.invoke('sync:sendCode', email),
+  /**
+   * 渲染进程 SDK 登录成功后,通知主进程绑定 uid 到本地 profile
+   * @param {string} uid       CloudBase 用户 uid
+   * @param {Object} options   { username?, isNewUser?, importLocalData? }
+   */
+  authSetUid: (uid, options = {}) => ipcRenderer.invoke('auth:setUid', uid, options),
 
-  /** 用户注册（需验证码） */
-  syncRegister: (username, password, code, importLocalData = true) => ipcRenderer.invoke('sync:register', username, password, code, importLocalData),
+  /** 渲染进程 SDK 登出后,通知主进程清除 session + 切回匿名 profile */
+  authClearUid: () => ipcRenderer.invoke('auth:clearUid'),
 
-  /** 用户登录 */
-  syncLogin: (username, password) => ipcRenderer.invoke('sync:login', username, password),
-
-  /** 退出登录 */
-  syncLogout: () => ipcRenderer.invoke('sync:logout'),
-
-  /** 获取同步登录状态 */
+  /** 获取主进程持久化的登录状态 */
   syncGetStatus: () => ipcRenderer.invoke('sync:getStatus'),
 
   /** 手动触发双向同步 */

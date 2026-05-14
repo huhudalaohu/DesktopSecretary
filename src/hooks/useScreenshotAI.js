@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  MODEL_PROVIDERS,
   SCREENSHOT_PROMPT,
   extractTokens,
+  extractContent,
   loadTokenStats,
   recordTokenUsage,
 } from '../config/ai-config';
+import { callAI, CallAIError } from '../services/ai-proxy';
 import { parseDeadlineToTimestamp } from '../utils/datetime';
 import { hashDataUrl } from '../utils/format';
 
@@ -18,6 +19,21 @@ export const SCREENSHOT_STATUS = {
 };
 
 export const DAILY_LIMIT = 100000;
+
+function describeAIError(err) {
+  if (err instanceof CallAIError) {
+    switch (err.code) {
+      case 'NOT_LOGGED_IN': return '请先登录账号';
+      case 'INSUFFICIENT_CREDITS': return '积分不足,请前往设置充值';
+      case 'DAILY_LIMIT_EXCEEDED': return '当日用量已达上限,请明天再试';
+      case 'MAINTENANCE': return '服务维护中,请稍后再试';
+      case 'UPSTREAM_ERROR': return `上游 AI 异常: ${err.detail || err.message}`;
+      case 'NETWORK_ERROR': return `网络错误: ${err.message}`;
+      default: return err.message || 'AI 调用失败';
+    }
+  }
+  return err?.message || 'AI 调用失败';
+}
 
 export function useScreenshotAI(api, aiSettings) {
   const [screenshot, setScreenshot] = useState(null);
@@ -59,76 +75,27 @@ export function useScreenshotAI(api, aiSettings) {
 
     setScreenshot(croppedDataUrl);
 
-    if (!aiSettings.apiKey) {
-      setScreenshotStatus(SCREENSHOT_STATUS.ERROR);
-      setStatusMessage('请先在 API 设置中填写 API Key');
-      return;
-    }
-
     setScreenshotStatus(SCREENSHOT_STATUS.ANALYZING);
     setStatusMessage('AI 识别中...');
 
     try {
-      const provider = MODEL_PROVIDERS[aiSettings.provider];
-      const baseUrl = aiSettings.provider === 'custom' ? aiSettings.customBaseUrl : provider.baseUrl;
+      // 截图理解需要多模态,默认走 precise(若用户选了 fast 也允许)
+      const mode = aiSettings?.mode === 'fast' ? 'fast' : 'precise';
+      const messages = [{
+        role: 'user',
+        content: [
+          { type: 'text', text: SCREENSHOT_PROMPT },
+          { type: 'image_url', image_url: { url: croppedDataUrl } },
+        ],
+      }];
 
-      if (!baseUrl) {
-        setScreenshotStatus(SCREENSHOT_STATUS.ERROR);
-        setStatusMessage('请填写 Base URL');
-        return;
-      }
-
-      const supportsImage = ['kimi', 'tongyi', 'custom'].includes(aiSettings.provider);
-      const messages = supportsImage
-        ? [{
-            role: 'user',
-            content: [
-              { type: 'text', text: SCREENSHOT_PROMPT },
-              { type: 'image_url', image_url: { url: croppedDataUrl } },
-            ],
-          }]
-        : [{
-            role: 'user',
-            content: SCREENSHOT_PROMPT + '\n（注：当前模型不支持图片输入，请根据文字提示返回格式）',
-          }];
-
-      const body = aiSettings.provider === 'custom'
-        ? { ...provider.buildBody(messages), model: aiSettings.customModel || '' }
-        : provider.buildBody(messages);
-
-      const url = provider.buildUrl
-        ? provider.buildUrl(baseUrl, aiSettings.apiKey)
-        : `${baseUrl}/chat/completions`;
-      const headers = provider.headers(aiSettings.apiKey);
-
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      });
-
-      const respText = await resp.text().catch(() => '');
-
-      if (!resp.ok) {
-        if (resp.status === 403) throw new Error(`API Key 无效或模型无权限 (${resp.status})。请求URL: ${url}`);
-        if (resp.status === 404) throw new Error(`模型名称错误 (${resp.status})，当前模型: ${body.model}，请尝试 mimo-v2-pro`);
-        if (resp.status === 429) throw new Error('请求过于频繁，请稍后再试');
-        if (resp.status === 401) throw new Error(`认证失败 (${resp.status})：API Key 格式可能不对。响应: ${respText.slice(0, 200)}`);
-        throw new Error(`API 返回 ${resp.status}: ${respText.slice(0, 200)}`);
-      }
-
-      let data;
-      try { data = JSON.parse(respText); } catch (parseErr) {
-        throw new Error(`API 返回了非 JSON 格式的内容: ${respText.slice(0, 200)}`);
-      }
-
-      const content = provider.extractContent(data);
+      const data = await callAI({ mode, messages, max_tokens: 1024 });
+      const content = extractContent(data);
       if (!content) {
-        if (data.choices && data.choices.length === 0) {
-          throw new Error('API 返回了空的 choices 数组，可能是图片过大或模型不支持当前请求格式');
+        if (data?.choices && data.choices.length === 0) {
+          throw new Error('API 返回了空的 choices 数组,可能是图片过大或模型不支持当前格式');
         }
-        if (data.error) throw new Error(`API 返回错误: ${JSON.stringify(data.error).slice(0, 200)}`);
-        throw new Error(`API 返回内容为空。完整响应: ${JSON.stringify(data).slice(0, 300)}`);
+        throw new Error('AI 返回内容为空');
       }
 
       let result;
@@ -148,7 +115,7 @@ export function useScreenshotAI(api, aiSettings) {
         const cached = recentScreenshots.current[imgHash];
         if (cached && (Date.now() - cached.timestamp < 60 * 60 * 1000)) {
           setScreenshotStatus(SCREENSHOT_STATUS.SUCCESS);
-          setStatusMessage('该截图 1 小时内已提交过，已返回上次结果');
+          setStatusMessage('该截图 1 小时内已提交过,已返回上次结果');
           return;
         }
 
@@ -186,12 +153,12 @@ export function useScreenshotAI(api, aiSettings) {
         api.dockExpand(5000);
       } else {
         setScreenshotStatus(SCREENSHOT_STATUS.SUCCESS);
-        setStatusMessage('未识别到待办事项，请尝试文字更清晰的截图');
+        setStatusMessage('未识别到待办事项,请尝试文字更清晰的截图');
         api.dockExpand(5000);
       }
     } catch (err) {
       setScreenshotStatus(SCREENSHOT_STATUS.ERROR);
-      setStatusMessage(`API 连接失败: ${err.message}`);
+      setStatusMessage(describeAIError(err));
     }
   }, [aiSettings, api]);
 

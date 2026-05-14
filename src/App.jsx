@@ -12,6 +12,7 @@ import QuickLinks from './features/files/components/QuickLinks';
 import Timeline from './features/reminders/components/Timeline';
 import SettingsPanel from './features/settings/components/SettingsPanel';
 import TrashPanel from './features/trash/components/TrashPanel';
+import RechargeModal from './features/credits/RechargeModal';
 import { DEFAULT_REMINDER_LEVELS } from './features/reminders/components/ReminderLevelSettings';
 import { DEFAULT_AI_SETTINGS } from './config/ai-config';
 import { X, Pin, PinOff, Settings, Trash2 } from 'lucide-react';
@@ -44,6 +45,9 @@ export default function App() {
   const [dataActionMsg, setDataActionMsg] = useState(null);
   const [exporting, setExporting] = useState(false);
   const [importing, setImporting] = useState(false);
+
+  // 充值弹窗(放在根级避免被设置面板的 overflow 裁剪)
+  const [rechargeOpen, setRechargeOpen] = useState(false);
 
   // ========== Hooks ==========
   const settings = useSettings(api);
@@ -398,10 +402,9 @@ export default function App() {
           <SettingsPanel
             panelRef={settings.settingsPanelRef}
             fontScale={settings.fontScale}
+            setFontScale={settings.setFontScale}
             aiSettings={settings.aiSettings}
             setAiSettings={settings.setAiSettings}
-            showKey={settings.showKey}
-            setShowKey={settings.setShowKey}
             editingShortcut={settings.editingShortcut}
             setEditingShortcut={settings.setEditingShortcut}
             shortcutInput={settings.shortcutInput}
@@ -436,6 +439,7 @@ export default function App() {
             handleDownloadUpdate={handleDownloadUpdate}
             handleInstallUpdate={handleInstallUpdate}
             api={api}
+            onOpenRecharge={() => setRechargeOpen(true)}
           />
         )}
 
@@ -480,6 +484,11 @@ export default function App() {
           </button>
         </div>
       </div>{/* /字号缩放区域 */}
+
+      {/* 充值弹窗:渲染在 zoom 容器外,避免被缩放和被设置面板 overflow 裁剪 */}
+      {rechargeOpen && (
+        <RechargeModal onClose={() => setRechargeOpen(false)} />
+      )}
     </div>
   );
 }

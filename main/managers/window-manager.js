@@ -40,7 +40,6 @@ class WindowManager {
     }));
 
     this.platform.windowOptions.applyMainWindowPlatformSetup(this.mainWindow);
-    this.mainWindow.setContentProtection(true);
     if (!app.isPackaged) {
       console.log('[Window] created, initialBounds=', initialBounds, 'dockedEdge=', dock.dockedEdge);
     }

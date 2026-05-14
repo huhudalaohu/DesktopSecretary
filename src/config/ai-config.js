@@ -1,98 +1,9 @@
-// AI 助手共享配置
+// AI 助手共享配置(v2:平台垫付,客户端不再保存 apiKey/provider/baseUrl)
+//
+// 服务端 ai-proxy 云函数根据 mode (fast | precise) 决定调哪个上游模型,
+// 客户端只需要传 mode + messages 即可。
 
-// 内测预设配置（从 ai-preset.js 读取，如不存在则使用空默认值）
-let PRESET = {};
-try {
-  const m = await import('./ai-preset.js');
-  PRESET = m.AI_PRESET || {};
-} catch {
-  // ai-preset.js 不存在时使用空预设
-}
-
-export const MODEL_PROVIDERS = {
-  kimi: {
-    label: 'Kimi (Moonshot)',
-    baseUrl: 'https://api.moonshot.cn/v1',
-    headers: (key) => ({
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${key}`,
-    }),
-    buildBody: (messages) => ({
-      model: 'moonshot-v1-8k',
-      messages,
-      max_tokens: 1024,
-    }),
-    extractContent: (data) => data.choices?.[0]?.message?.content || '',
-  },
-  tongyi: {
-    label: '通义千问 (Aliyun)',
-    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    headers: (key) => ({
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${key}`,
-    }),
-    buildBody: (messages) => ({
-      model: 'qwen-max',
-      messages,
-      max_tokens: 1024,
-    }),
-    extractContent: (data) => data.choices?.[0]?.message?.content || '',
-  },
-  wenxin: {
-    label: '文心一言 (Baidu)',
-    baseUrl: 'https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat',
-    headers: (key) => ({
-      'Content-Type': 'application/json',
-    }),
-    buildBody: (messages) => ({
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
-    }),
-    buildUrl: (baseUrl, key) => `${baseUrl}/completions?access_token=${key}`,
-    extractContent: (data) => data.result || data.choices?.[0]?.message?.content || '',
-  },
-  doubao: {
-    label: '豆包 (ByteDance)',
-    baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
-    headers: (key) => ({
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${key}`,
-    }),
-    buildBody: (messages) => ({
-      model: 'doubao-pro-4k',
-      messages,
-      max_tokens: 1024,
-    }),
-    extractContent: (data) => data.choices?.[0]?.message?.content || '',
-  },
-  custom: {
-    label: '自定义',
-    baseUrl: '',
-    headers: (key) => ({
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${key}`,
-    }),
-    buildBody: (messages) => ({
-      model: 'gpt-4o-mini',
-      messages,
-      max_tokens: 1024,
-    }),
-    extractContent: (data) => {
-      const msg = data.choices?.[0]?.message;
-      if (!msg) return '';
-      return msg.content || msg.reasoning_content || '';
-    },
-  },
-};
-
-export const PROVIDER_KEYS = Object.keys(MODEL_PROVIDERS);
-
-export const DEFAULT_AI_SETTINGS = {
-  provider: PRESET.provider || 'kimi',
-  apiKey: PRESET.apiKey || '',
-  customBaseUrl: PRESET.customBaseUrl || '',
-  customModel: PRESET.customModel || '',
-  shortcutKey: PRESET.shortcutKey || 'CmdOrCtrl+Shift+A',
-};
+// ===== Prompt 常量 =====
 
 export const SCREENSHOT_PROMPT = `请分析这张截图，提取待办事项。如果是聊天/邮件/文档：
 - 任务内容：提炼具体要做什么（不超过50字，过长时压缩为"动词+对象"核心结构）
@@ -108,11 +19,24 @@ export const SCREENSHOT_PROMPT = `请分析这张截图，提取待办事项。�
 
 export const MEMORY_SUMMARY_PROMPT = `请总结以下用户与AI的对话，提取关键信息（项目名称、待办、决策、文件路径），用于后续检索。摘要不超过100字，同时提取3-5个关键词。`;
 
-export const URL_TITLE_PROMPT = `根据以下 URL 生成一个简洁的中文标题（不超过10个字），只返回标题本身，不要有任何解释、标点或引号。`; 
+export const URL_TITLE_PROMPT = `根据以下 URL 生成一个简洁的中文标题（不超过10个字），只返回标题本身，不要有任何解释、标点或引号。`;
 
-export const URL_TITLE_SYSTEM_PROMPT = `你是一个 URL 标题生成助手。根据用户提供的 URL，生成一个简洁的中文标题（不超过10个字）。只返回标题文本，不要任何解释、标点或引号。`; 
+export const URL_TITLE_SYSTEM_PROMPT = `你是一个 URL 标题生成助手。根据用户提供的 URL，生成一个简洁的中文标题（不超过10个字）。只返回标题文本，不要任何解释、标点或引号。`;
 
-// ===== Token 统计工具 =====
+// ===== AI 模式 =====
+
+// 服务端 app_config.aiModes 决定 fast / precise 实际指向的模型;客户端只关心 mode 标识。
+export const AI_MODE_OPTIONS = [
+  { value: 'fast', label: '快速', desc: '响应快,适合标题/标签等轻量任务' },
+  { value: 'precise', label: '精准', desc: '识别强,适合截图理解等复杂任务' },
+];
+
+export const DEFAULT_AI_SETTINGS = {
+  mode: 'fast',                          // 'fast' | 'precise'
+  shortcutKey: 'CmdOrCtrl+Shift+A',
+};
+
+// ===== Token 统计工具(本地累计,UI 展示用,与服务端扣分独立)=====
 
 export function extractTokens(data, content) {
   if (data?.usage?.total_tokens) return data.usage.total_tokens;
@@ -121,7 +45,7 @@ export function extractTokens(data, content) {
     return (u.prompt_tokens || 0) + (u.completion_tokens || 0) + (u.total_tokens || 0);
   }
   if (!content) return 0;
-  const cjk = (content.match(/[\u4e00-\u9fff]/g) || []).length;
+  const cjk = (content.match(/[一-鿿]/g) || []).length;
   const ascii = content.length - cjk;
   return cjk * 2 + ascii;
 }
@@ -157,3 +81,9 @@ export async function recordTokenUsage(api, tokens) {
   return stats;
 }
 
+/** 从 callAI 返回的 OpenAI 兼容数据里提取 content 文本(等价于旧的 provider.extractContent) */
+export function extractContent(data) {
+  const msg = data?.choices?.[0]?.message;
+  if (!msg) return '';
+  return msg.content || msg.reasoning_content || '';
+}

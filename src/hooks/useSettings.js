@@ -1,17 +1,32 @@
 import { useState, useEffect, useRef } from 'react';
 import {
-  MODEL_PROVIDERS,
   DEFAULT_AI_SETTINGS,
   extractTokens,
+  extractContent,
   recordTokenUsage,
 } from '../config/ai-config';
+import { callAI, CallAIError } from '../services/ai-proxy';
+
+function describeAIError(err) {
+  if (err instanceof CallAIError) {
+    switch (err.code) {
+      case 'NOT_LOGGED_IN': return '请先登录账号';
+      case 'INSUFFICIENT_CREDITS': return '积分不足,请充值';
+      case 'DAILY_LIMIT_EXCEEDED': return '当日用量已达上限';
+      case 'MAINTENANCE': return '服务维护中,请稍后再试';
+      case 'UPSTREAM_ERROR': return `上游 AI 异常: ${err.detail || err.message}`;
+      case 'NETWORK_ERROR': return `网络错误: ${err.message}`;
+      default: return err.message || 'AI 调用失败';
+    }
+  }
+  return err?.message || 'AI 调用失败';
+}
 
 export function useSettings(api) {
   const [showSettings, setShowSettings] = useState(false);
   const settingsPanelRef = useRef(null);
   const settingsButtonRef = useRef(null);
 
-  const [showKey, setShowKey] = useState(false);
   const [aiSettings, setAiSettings] = useState(DEFAULT_AI_SETTINGS);
   const [editingShortcut, setEditingShortcut] = useState(false);
   const [shortcutInput, setShortcutInput] = useState('');
@@ -86,44 +101,21 @@ export function useSettings(api) {
   const handleTestConnection = async () => {
     setTesting(true);
     setTestResult(null);
-    const provider = MODEL_PROVIDERS[aiSettings.provider];
-    const baseUrl = aiSettings.provider === 'custom' ? aiSettings.customBaseUrl : provider.baseUrl;
-    if (!baseUrl) {
-      setTestResult({ success: false, message: '请填写 Base URL' });
-      setTesting(false);
-      return;
-    }
-    if (!aiSettings.apiKey) {
-      setTestResult({ success: false, message: '请填写 API Key' });
-      setTesting(false);
-      return;
-    }
-    const testMessages = [{ role: 'user', content: 'Hello, reply with "OK" only.' }];
-    const body = aiSettings.provider === 'custom'
-      ? { ...provider.buildBody(testMessages), model: aiSettings.customModel || '' }
-      : provider.buildBody(testMessages);
-    const url = provider.buildUrl
-      ? provider.buildUrl(baseUrl, aiSettings.apiKey)
-      : `${baseUrl}/chat/completions`;
-    const headers = provider.headers(aiSettings.apiKey);
     try {
-      const resp = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
-      if (!resp.ok) {
-        const errorText = await resp.text().catch(() => '');
-        if (resp.status === 403) setTestResult({ success: false, message: `403 Forbidden: API Key 无效或模型无权限。请求URL: ${url}` });
-        else if (resp.status === 404) setTestResult({ success: false, message: `404 Not Found: 模型名称错误，当前模型: ${body.model}，请尝试 mimo-v2-pro` });
-        else if (resp.status === 429) setTestResult({ success: false, message: '429 Too Many Requests: 请求频繁，请稍后再试' });
-        else if (resp.status === 401) setTestResult({ success: false, message: `401 Unauthorized: 认证失败，请检查 Authorization 头格式。当前: ${headers.Authorization?.slice(0, 20)}...` });
-        else setTestResult({ success: false, message: `${resp.status} ${resp.statusText}: ${errorText.slice(0, 200)}` });
-      } else {
-        const data = await resp.json();
-        const content = provider.extractContent(data);
-        const tokensUsed = extractTokens(data, content);
-        await recordTokenUsage(api, tokensUsed);
-        setTestResult({ success: true, message: `连接成功! 模型: ${body.model}, 回复: ${content.slice(0, 50)}` });
-      }
+      const mode = aiSettings.mode || 'fast';
+      const data = await callAI({
+        mode,
+        messages: [{ role: 'user', content: 'Hello, reply with "OK" only.' }],
+        max_tokens: 32,
+      });
+      const content = extractContent(data);
+      const tokensUsed = extractTokens(data, content);
+      await recordTokenUsage(api, tokensUsed);
+      const credits = data?._credits;
+      const usedNote = credits ? `,扣 ${credits.used} 积分,余额 ${credits.balanceAfter}` : '';
+      setTestResult({ success: true, message: `连接成功 (${mode}): ${content.slice(0, 50)}${usedNote}` });
     } catch (err) {
-      setTestResult({ success: false, message: `网络错误: ${err.message}` });
+      setTestResult({ success: false, message: describeAIError(err) });
     } finally {
       setTesting(false);
     }
@@ -132,48 +124,24 @@ export function useSettings(api) {
   const handleTextTest = async () => {
     setTextTesting(true);
     setTextTestResult(null);
-    const provider = MODEL_PROVIDERS[aiSettings.provider];
-    const baseUrl = aiSettings.provider === 'custom' ? aiSettings.customBaseUrl : provider.baseUrl;
-    if (!baseUrl) {
-      setTextTestResult({ success: false, message: '请填写 Base URL' });
-      setTextTesting(false);
-      return;
-    }
-    if (!aiSettings.apiKey) {
-      setTextTestResult({ success: false, message: '请填写 API Key' });
-      setTextTesting(false);
-      return;
-    }
-    const testMessages = [{
-      role: 'user',
-      content: '请分析这个需求，提取待办事项。需求：完成项目v2.0的登录模块开发，截止周五。返回JSON格式：{tasks:[{title, deadline, priority}]}',
-    }];
-    const body = aiSettings.provider === 'custom'
-      ? { ...provider.buildBody(testMessages), model: aiSettings.customModel || '' }
-      : provider.buildBody(testMessages);
-    const url = provider.buildUrl
-      ? provider.buildUrl(baseUrl, aiSettings.apiKey)
-      : `${baseUrl}/chat/completions`;
-    const headers = provider.headers(aiSettings.apiKey);
     try {
-      const resp = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
-      const respText = await resp.text();
-      if (!resp.ok) {
-        setTextTestResult({ success: false, message: `HTTP ${resp.status}: ${respText.slice(0, 300)}` });
-      } else {
-        let data;
-        try { data = JSON.parse(respText); } catch { data = null; }
-        if (data) {
-          const content = provider.extractContent(data);
-          const tokensUsed = extractTokens(data, content);
-          await recordTokenUsage(api, tokensUsed);
-          setTextTestResult({ success: true, message: `成功! 回复: ${content.slice(0, 150)}` });
-        } else {
-          setTextTestResult({ success: false, message: `非JSON响应: ${respText.slice(0, 300)}` });
-        }
-      }
+      const mode = aiSettings.mode || 'fast';
+      const data = await callAI({
+        mode,
+        messages: [{
+          role: 'user',
+          content: '请分析这个需求,提取待办事项。需求:完成项目v2.0的登录模块开发,截止周五。返回JSON格式:{tasks:[{title, deadline, priority}]}',
+        }],
+        max_tokens: 256,
+      });
+      const content = extractContent(data);
+      const tokensUsed = extractTokens(data, content);
+      await recordTokenUsage(api, tokensUsed);
+      const credits = data?._credits;
+      const usedNote = credits ? ` · 扣 ${credits.used} 积分,余额 ${credits.balanceAfter}` : '';
+      setTextTestResult({ success: true, message: `成功! 回复: ${content.slice(0, 150)}${usedNote}` });
     } catch (err) {
-      setTextTestResult({ success: false, message: `网络错误: ${err.message}` });
+      setTextTestResult({ success: false, message: describeAIError(err) });
     } finally {
       setTextTesting(false);
     }
@@ -184,8 +152,6 @@ export function useSettings(api) {
     setShowSettings,
     settingsPanelRef,
     settingsButtonRef,
-    showKey,
-    setShowKey,
     aiSettings,
     setAiSettings,
     editingShortcut,

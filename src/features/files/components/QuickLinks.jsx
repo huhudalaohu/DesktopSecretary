@@ -17,7 +17,8 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronRight, ChevronDown, Pencil, Trash2, GripVertical, Loader2, X, Circle, Plus } from 'lucide-react';
-import { MODEL_PROVIDERS, URL_TITLE_SYSTEM_PROMPT, extractTokens, recordTokenUsage } from '../../../config/ai-config';
+import { URL_TITLE_SYSTEM_PROMPT, extractTokens, extractContent, recordTokenUsage } from '../../../config/ai-config';
+import { callAI, CallAIError } from '../../../services/ai-proxy';
 
 const api = window.desktopAPI;
 
@@ -351,7 +352,7 @@ function cleanShareTitle(raw) {
 }
 
 // ===== 四层渐进式识别 =====
-async function resolveTitle(url, aiSettings) {
+async function resolveTitle(url) {
   // 0层：URL 参数
   const paramTitle = getNameFromUrlParams(url);
   if (paramTitle) {
@@ -392,47 +393,32 @@ async function resolveTitle(url, aiSettings) {
     }
   }
 
-  // 4层：AI 兜底（根据 URL 生成标题）
-  if (aiSettings?.apiKey) {
-    const aiResult = await resolveTitleWithAI(url, aiSettings);
-    if (aiResult) return aiResult;
-  }
+  // 4层:AI 兜底(根据 URL 生成标题,服务端按 fast 模式扣分)
+  const aiResult = await resolveTitleWithAI(url);
+  if (aiResult) return aiResult;
 
-  // 5层：本地路径规则兜底
+  // 5层:本地路径规则兜底
   return timeoutFallback(url);
 }
 
-async function resolveTitleWithAI(url, aiSettings) {
-  if (!aiSettings || !aiSettings.apiKey) return null;
-  const provider = MODEL_PROVIDERS[aiSettings.provider];
-  const baseUrl = aiSettings.provider === 'custom' ? aiSettings.customBaseUrl : provider.baseUrl;
-  if (!baseUrl) return null;
-
+async function resolveTitleWithAI(url) {
   const messages = [
     { role: 'system', content: URL_TITLE_SYSTEM_PROMPT },
     { role: 'user', content: `URL: ${url}` },
   ];
 
-  const body = aiSettings.provider === 'custom'
-    ? { ...provider.buildBody(messages), model: aiSettings.customModel || '' }
-    : provider.buildBody(messages);
-  const headers = provider.headers(aiSettings.apiKey);
-
   try {
-    const resp = await fetch(`${baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
-    const data = await resp.json();
-    const content = provider.extractContent(data);
+    const data = await callAI({ mode: 'fast', messages, max_tokens: 64 });
+    const content = extractContent(data);
     if (content) {
       const tokensUsed = extractTokens(data, content);
       await recordTokenUsage(api, tokensUsed);
       return { title: content.trim().replace(/^["']|["']$/g, ''), favicon: getFaviconUrl(url), source: 'ai' };
     }
   } catch (err) {
-    console.error('[AI Title] 识别失败:', err);
+    if (err instanceof CallAIError && err.code !== 'NOT_LOGGED_IN' && err.code !== 'INSUFFICIENT_CREDITS') {
+      console.error('[AI Title] 识别失败:', err.code, err.message);
+    }
   }
   return null;
 }
@@ -521,13 +507,8 @@ export default function QuickLinks({ activeWorkspace }) {
   const globalTimersRef = useRef({}); // iconId → interval
   const globalCancelledRef = useRef(new Set()); // 已取消的全局图标 id
 
-  // AI 配置（用于 URL 标题识别兜底）
-  const [aiSettings, setAiSettings] = useState(null);
-  useEffect(() => {
-    api.storeGet('aiSettings', {}).then((saved) => {
-      if (saved && saved.apiKey) setAiSettings(saved);
-    });
-  }, []);
+  // AI 配置(v2:平台垫付,仅 mode 字段用于 callAI)
+  // QuickLinks 内部 URL 标题识别始终用 fast 模式;不需要在此读 aiSettings。
 
   // 存储键按工作区分隔
   const storeKey = `quickLinks:${activeWorkspace}`;
@@ -771,7 +752,7 @@ export default function QuickLinks({ activeWorkspace }) {
     }
 
     try {
-      const { title, favicon, source } = await resolveTitle(url, aiSettings);
+      const { title, favicon, source } = await resolveTitle(url);
 
       // 检查是否已被取消
       if (cancelledRef.current.has(tempId)) {
@@ -981,7 +962,7 @@ export default function QuickLinks({ activeWorkspace }) {
     }
 
     try {
-      const { title, favicon, source } = await resolveTitle(url, aiSettings);
+      const { title, favicon, source } = await resolveTitle(url);
       if (globalCancelledRef.current.has(tempId)) {
         globalCancelledRef.current.delete(tempId);
         releaseSlot();
