@@ -10,6 +10,7 @@ import {
   getCurrentUser,
   getAccessToken,
 } from '../../../services/cloudbase';
+import { fetchBalance, CallAIError } from '../../../services/ai-proxy';
 
 const api = window.desktopAPI;
 
@@ -154,14 +155,22 @@ export default function SyncPanel() {
     setLoading(true);
     try {
       const { uid, user } = await signInWithPassword({ email, password });
+      console.log('[Auth] UID:', uid);
       const bound = await api.authSetUid(uid, {
         username: user.email || email,
         isNewUser: false,
       });
       if (!bound.success) throw new Error(bound.error || '同步引擎绑定失败');
+
+      // 核对/补建 MySQL 积分记录（老用户或上次初始化失败的兜底）
+      try {
+        await fetchBalance();
+      } catch (initErr) {
+        console.warn('[SyncPanel] 登录后积分核对失败:', initErr.message);
+      }
+
       setStatus({ isLoggedIn: true, username: user.email || email });
       setUsername(''); setPassword(''); setCode('');
-      // 通知 CreditsPanel 刷新,服务端会按需补送 welcome 积分
       window.dispatchEvent(new CustomEvent('credits-updated', { detail: {} }));
       showMsg('登录成功', 'success');
     } catch (err) {
@@ -184,11 +193,20 @@ export default function SyncPanel() {
     setLoading(true);
     try {
       const { uid, user } = await signInWithEmailCode({ email, code, verification_id: verificationId });
+      console.log('[Auth] UID:', uid);
       const bound = await api.authSetUid(uid, {
         username: user.email || email,
         isNewUser: false,
       });
       if (!bound.success) throw new Error(bound.error || '同步引擎绑定失败');
+
+      // 核对/补建 MySQL 积分记录
+      try {
+        await fetchBalance();
+      } catch (initErr) {
+        console.warn('[SyncPanel] 登录后积分核对失败:', initErr.message);
+      }
+
       setStatus({ isLoggedIn: true, username: user.email || email });
       setUsername(''); setCode(''); setVerificationId(null);
       window.dispatchEvent(new CustomEvent('credits-updated', { detail: {} }));
@@ -237,6 +255,7 @@ export default function SyncPanel() {
         verification_id: verificationId,
         code,
       });
+      console.log('[Auth] UID:', uid);
 
       // signUp 成功未必同时建立 session(accessToken)。如果没拿到,显式用密码登一次。
       // CloudBase Auth 的 hasLoginState 与 getAccessToken 是两套状态,fetchBalance
@@ -256,12 +275,21 @@ export default function SyncPanel() {
         importLocalData,
       });
       if (!bound.success) throw new Error(bound.error || '同步引擎绑定失败');
+
+      // 显式初始化 MySQL 积分记录（500 welcome），比事件广播更可靠
+      try {
+        await fetchBalance();
+      } catch (initErr) {
+        console.warn('[SyncPanel] 注册后积分初始化失败:', initErr.message);
+        // 不阻断：CreditsPanel 稍后会通过事件重试
+      }
+
       setStatus({ isLoggedIn: true, username: user.email || email });
       setUsername(''); setPassword(''); setConfirmPassword(''); setCode('');
       setVerificationId(null);
       setImportLocalData(true);
       setMode('login-password');
-      // 通知 CreditsPanel 立即拉余额 → 云函数会按需懒初始化送 500
+      // 同时广播事件供 CreditsPanel 刷新 UI
       window.dispatchEvent(new CustomEvent('credits-updated', { detail: {} }));
       showMsg(importLocalData ? '注册成功,已同步本地数据' : '注册成功,已创建空账户', 'success');
     } catch (err) {

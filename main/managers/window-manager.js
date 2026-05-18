@@ -24,7 +24,17 @@ class WindowManager {
     const initialBounds = dock.getInitialBounds();
 
     const isDev = this.getEnv() === 'development';
-    const { BrowserWindow, app } = require('electron');
+    const { BrowserWindow, app, session } = require('electron');
+
+    // CloudBase 域名直连,不经过系统代理(避免 Clash 代理超时)
+    const proxyUrl = process.env.PROXY_URL || 'http://127.0.0.1:7897';
+    const proxyHost = proxyUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    if (proxyHost) {
+      const pacScript = `function FindProxyForURL(u,h){if(h.includes('tcloudbase.com'))return'DIRECT';if(h==='localhost'||h==='127.0.0.1')return'DIRECT';return'PROXY ${proxyHost}';}`;
+      const pacDataUrl = 'data:application/x-ns-proxy-autoconfig;base64,' + Buffer.from(pacScript).toString('base64');
+      session.defaultSession.setProxy({ mode: 'pac_script', pacScript: pacDataUrl });
+      console.log('[Window] PAC proxy: tcloudbase.com → DIRECT, 其它 →', proxyHost);
+    }
 
     this.mainWindow = new BrowserWindow(this.platform.windowOptions.mainWindowOptions({
       x: initialBounds.x,

@@ -22,6 +22,7 @@ export default defineConfig(({ mode }) => {
       __CREATE_RECHARGE_URL__: JSON.stringify(env.CREATE_RECHARGE_URL || ''),
       __QUERY_ORDER_URL__: JSON.stringify(env.QUERY_ORDER_URL || ''),
       __MOCK_PAY_URL__: JSON.stringify(env.MOCK_PAY_URL || ''),
+      __DIRECT_RECHARGE_URL__: JSON.stringify(env.DIRECT_RECHARGE_URL || ''),
     },
     // 开发模式下渲染进程构建配置
     root: '.',                // 项目根目录
