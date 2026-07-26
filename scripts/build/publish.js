@@ -63,6 +63,8 @@ function getCredentials() {
 function uploadFile(cos, key, filePath) {
   const size = fs.statSync(filePath).size;
   const sizeMB = (size / 1024 / 1024).toFixed(1);
+  // yml 元数据必须禁缓存:COS 默认不发缓存头,Chromium 启发式缓存会让客户端一直读到旧版本号
+  const cacheControl = key.endsWith('.yml') ? 'no-cache' : undefined;
   return new Promise((resolve, reject) => {
     // 大于 50MB 的文件使用分片上传，避免超时
     if (size > 50 * 1024 * 1024) {
@@ -73,6 +75,7 @@ function uploadFile(cos, key, filePath) {
           Region: REGION,
           Key: key,
           FilePath: filePath,
+          ...(cacheControl ? { CacheControl: cacheControl } : {}),
           onProgress: (progressData) => {
             const pct = Math.round(progressData.percent * 100);
             if (pct % 10 === 0) {
@@ -93,6 +96,7 @@ function uploadFile(cos, key, filePath) {
           Key: key,
           Body: fs.createReadStream(filePath),
           ContentLength: size,
+          ...(cacheControl ? { CacheControl: cacheControl } : {}),
         },
         (err, data) => {
           if (err) reject(err);
@@ -259,6 +263,11 @@ async function main() {
   const needUploadList = [];
 
   for (const item of uploadList) {
+    // yml 元数据每次发版内容必变，必须强制覆盖，不能走 dedup（否则客户端永远拉到旧版本号）
+    if (item.remote.endsWith('.yml')) {
+      needUploadList.push(item);
+      continue;
+    }
     const exists = await checkCosFileExists(cos, item.remote);
     if (exists) {
       skipList.push(item);

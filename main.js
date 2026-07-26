@@ -183,6 +183,9 @@ app.whenReady().then(async () => {
     const platformDir = process.platform === 'darwin' ? 'mac' : 'win';
     const feedUrl = `https://ds-update-1420931574.cos.ap-guangzhou.myqcloud.com/updates/${platformDir}`;
     autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl });
+    // COS 默认不发缓存头,Chromium 启发式缓存会卡住 latest.yml,
+    // 客户端会一直读到旧版本号 — 请求时强制 no-cache
+    autoUpdater.requestHeaders = { 'Cache-Control': 'no-cache' };
     console.log(`[AutoUpdate] 平台: ${process.platform}, 更新源: ${feedUrl}`);
 
     autoUpdater.on('checking-for-update', () => {

@@ -208,6 +208,7 @@ node scripts/build/cleanup-cos.js
 - **根因**:`checkCosFileExists` 对所有文件统一处理,但 yml 文件名不变(`latest.yml` / `latest-mac.yml`),内容每次新版必变 → dedup 永远命中,新内容永远上不去
 - **修复**:在 [sync-from-github-to-cos.js](../scripts/build/sync-from-github-to-cos.js) 里**强制覆盖** yml,不走 dedup
 - **教训**:**dedup 必须按"内容是否会变"来判断,而不是统一一刀切**。yml 类元数据 = 总会变 = 必须覆盖;安装包 = 内容由文件名 + 版本号决定 = 可以 dedup
+- **复发记录(1.0.15 发版)**:[publish.js](../scripts/build/publish.js) 犯过一模一样的错——`checkCosFileExists` 把 `updates/win/latest.yml` / `updates/mac/latest-mac.yml` 当已存在跳过,导致安装包传了但 yml 停在旧版本。已同样改为 yml 强制覆盖。**改任何上传/同步脚本时,先全局搜一遍所有 dedup 逻辑**
 
 ### 坑 8: blockmap 没被同步 → Windows 自动更新走全量下载
 - **症状**:Windows 客户端检测到新版后,差分更新失败,回落到全量下载安装包(85MB+)
@@ -220,6 +221,14 @@ node scripts/build/cleanup-cos.js
 - **根因**:`main/managers/window-manager.js` 的 PAC 规则只放行 `tcloudbase.com` 直连,其余全走本机代理(Clash)。但**身份认证 API 域名是 `*.tcb-api.tencentcloudapi.com`、更新源 COS 域名是 `*.cos.*.myqcloud.com`**——都不在直连白名单里,代理一关或规则不转发就全挂
 - **修复**:PAC 白名单必须同时包含 `tcloudbase.com` / `tencentcloudapi.com` / `myqcloud.com`
 - **教训**:**以后新增任何腾讯云/CloudBase 相关域名,先想一遍 PAC 白名单**;排查"网络相关灵异故障"先看请求实际走了哪条代理
+
+### 坑 10: COS yml 无缓存头 → Chromium 启发式缓存旧 yml;前端版本号写死在构建产物里
+- **症状 A**:yml 已更新到新版,个别客户端仍长期显示"已是最新版本"
+- **根因 A**:COS 默认响应**不带 Cache-Control**,Chromium 按 Last-Modified 启发式缓存(约 10% 文件年龄),旧 yml 越老缓存越久
+- **修复 A**:`latest*.yml` 上传时必须带 `Cache-Control: no-cache`(publish.js 已内置);同时 `main.js` 里 `autoUpdater.requestHeaders = { 'Cache-Control': 'no-cache' }` 双保险
+- **症状 B**:本地打的 1.0.15 包,设置页却显示 1.0.14
+- **根因 B**:界面版本号 `__APP_VERSION__` 是 **Vite 构建时**从 package.json 写死的;electron-builder 只打包现有 `dist/`,不会重新构建前端。先 bump 版本号、但没重跑 `vite build` 就打安装包 → 壳是新版本,字是旧版本
+- **修复 B**:**本地发版顺序必须是: bump version → `npm run build` → electron-builder**(CI 流程本来就是对的,别在本地跳步)
 
 ---
 

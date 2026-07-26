@@ -20,7 +20,13 @@ export function useAutoUpdate(api) {
     setUpdateStatus('checking');
     setUpdateInfo(null);
     try {
-      await api.checkUpdate();
+      const result = await api.checkUpdate();
+      // 主进程明确失败时（如开发环境跳过、超时兜底）直接显示错误，
+      // 否则状态由 update:status 事件驱动
+      if (result && result.success === false) {
+        setUpdateStatus('error');
+        setUpdateInfo({ error: result.error || '检查更新失败' });
+      }
     } catch (err) {
       setUpdateStatus('error');
       setUpdateInfo({ error: err.message });
