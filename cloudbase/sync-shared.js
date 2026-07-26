@@ -45,17 +45,31 @@ function main() {
 
   console.log(`[sync-shared] 发现 ${sharedFiles.length} 个共享文件,${functions.length} 个云函数`);
 
+  // 按函数排除:_shared 的 credits-init.js 是 doc DB 版(供 get-balance),
+  // ai-proxy 用的是自己 lib/ 下的 MySQL 版(签名不同),绝不能覆盖。
+  // 踩过坑:一股脑同步导致 ai-proxy 运行时 db.collection is not a function,
+  // 所有 AI 请求报「初始化用户积分失败」。
+  const EXCLUDE_BY_FUNCTION = {
+    'ai-proxy': ['credits-init.js'],
+  };
+
   let total = 0;
   for (const fn of functions) {
     const libDir = path.join(FUNCTIONS_DIR, fn, 'lib');
     ensureDir(libDir);
-    for (const sf of sharedFiles) {
+    const excludes = EXCLUDE_BY_FUNCTION[fn] || [];
+    const files = sharedFiles.filter(f => !excludes.includes(f));
+    for (const sf of files) {
       const src = path.join(SHARED_DIR, sf);
       const dst = path.join(libDir, sf);
       const bytes = copyFile(src, dst);
       total += bytes;
     }
-    console.log(`[sync-shared]   → functions/${fn}/lib/  (${sharedFiles.length} files)`);
+    if (excludes.length > 0) {
+      console.log(`[sync-shared]   → functions/${fn}/lib/  (${files.length} files, 排除: ${excludes.join(', ')})`);
+    } else {
+      console.log(`[sync-shared]   → functions/${fn}/lib/  (${files.length} files)`);
+    }
   }
   console.log(`[sync-shared] 完成,共 ${total} 字节`);
 }

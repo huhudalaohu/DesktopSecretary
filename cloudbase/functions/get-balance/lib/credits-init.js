@@ -1,6 +1,10 @@
 /**
  * 用户积分的"懒初始化"工具函数(doc DB 版)。
  *
+ * ⚠️ 本文件仅供 doc DB 版函数使用(目前只有 get-balance)。
+ * ai-proxy 用的是它自己 lib/ 下的 **MySQL 版** credits-init.js(签名不同),
+ * sync-shared.js 已把 ai-proxy 排除在本文件的同步范围外,不要手动复制过去。
+ *
  * 任何接触 user_credits 的入口(ai-proxy / get-balance / direct-recharge)
  * 都应该先调一次 ensureUserCredits,保证:
  *   1. 用户首次出现时建立 user_credits 文档
