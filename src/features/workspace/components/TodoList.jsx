@@ -48,25 +48,23 @@ function parsePriorityPrefix(raw) {
 }
 
 /**
- * 按优先级排序：urgent > high > medium > low
- * 同优先级内按 id（时间戳）倒序，新的在前
+ * 排序：未完成置顶，已完成沉底
+ * 各组内 AI 新生成的待办优先，其余按添加顺序排列（先添加的在前）
  */
-function sortByPriority(todos) {
+function sortTodos(todos) {
   return todos
     .filter((t) => t && t.id)
     .sort((a, b) => {
-      const pA = PRIORITY_CONFIG[a.priority || 'medium'];
-      const pB = PRIORITY_CONFIG[b.priority || 'medium'];
-      if (!pA || !pB) return 0;
-      const diff = pA.order - pB.order;
-      if (diff !== 0) return diff;
+      // 未完成在前，已完成沉底
+      if (!!a.done !== !!b.done) return a.done ? 1 : -1;
       // AI 新生成的待办置顶
       if (a.isNew && !b.isNew) return -1;
       if (!a.isNew && b.isNew) return 1;
+      // 按添加顺序（先添加的在前）
       const tA = a.createdAt || 0;
       const tB = b.createdAt || 0;
-      if (tA !== tB) return tB - tA;
-      return String(b.id).localeCompare(String(a.id));
+      if (tA !== tB) return tA - tB;
+      return String(a.id).localeCompare(String(b.id));
     });
 }
 
@@ -103,11 +101,11 @@ function gradientColor(index, total, startHex = '#0259BB', endHex = '#B3D9FF') {
  */
 function getReminderColor(reminderTime, levels) {
   const useLevels = levels && levels.length > 0 ? levels : DEFAULT_REMINDER_LEVELS;
-  if (!reminderTime) return { bg: '#F5F5F5', text: '#999999' };
+  if (!reminderTime) return { bg: 'rgba(0, 0, 0, 0.0373)', text: '#9E9E9E' };
   const remainMs = reminderTime - Date.now();
   if (remainMs <= 0) {
     const expired = useLevels.find((l) => l.minutes === 0);
-    return expired ? { bg: expired.bg, text: expired.text } : { bg: '#E5E7EB', text: '#6B7280' };
+    return expired ? { bg: expired.bg, text: expired.text } : { bg: 'rgba(0, 0, 0, 0.06)', text: '#616161' };
   }
   const remainMin = remainMs / (60 * 1000);
   // 过滤掉 0 分钟（已过期），按时间升序排列
@@ -119,7 +117,7 @@ function getReminderColor(reminderTime, levels) {
   }
   // remain 大于所有层级，返回最后一个
   const last = sorted[sorted.length - 1];
-  return last ? { bg: last.bg, text: last.text } : { bg: '#F0FDF4', text: '#9CA3AF' };
+  return last ? { bg: last.bg, text: last.text } : { bg: 'rgba(0, 0, 0, 0.0373)', text: '#9E9E9E' };
 }
 
 /**
@@ -276,8 +274,8 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
     if (el && listRef.current) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       // 高亮闪烁效果
-      el.classList.add('ring-2', 'ring-blue-400');
-      setTimeout(() => el.classList.remove('ring-2', 'ring-blue-400'), 1500);
+      el.classList.add('ring-2', 'ring-fluent-accent');
+      setTimeout(() => el.classList.remove('ring-2', 'ring-fluent-accent'), 1500);
     }
   }, [focusTodoId]);
 
@@ -295,7 +293,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
   };
 
   // 排序后的待办列表
-  const sortedTodos = sortByPriority(todos);
+  const sortedTodos = sortTodos(todos);
 
   // 筛选后的列表
   const filteredTodos = sortedTodos.filter((t) => {
@@ -456,24 +454,24 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
         .todo-scroll::-webkit-scrollbar { width: 2px !important; }
         .todo-scroll::-webkit-scrollbar-track { background: transparent !important; border-radius: 999px !important; }
         .todo-scroll::-webkit-scrollbar-thumb { border-radius: 999px !important; background: transparent !important; }
-        .todo-scroll:hover::-webkit-scrollbar-thumb { background: #D4D4D4 !important; }
+        .todo-scroll:hover::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.2) !important; }
         .todo-scroll::-webkit-scrollbar-button { display: none !important; }
       `}</style>
-      <div className="rounded-lg bg-[#F5F5F5] border border-[#E5E5E5] p-3 shadow-sm">
+      <div className="card p-3">
         {/* ===== 筛选栏 ===== */}
         <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-1">
-          <span className="text-[15px] font-semibold text-[#333] mr-1">待办</span>
-          <ListFilter size={10} className="text-gray-300" />
+          <span className="text-[15px] font-semibold text-fluent-text-primary mr-1">待办</span>
+          <ListFilter size={10} className="text-fluent-text-tertiary" />
           {/* 状态筛选 */}
           {statusFilters.map((f) => (
             <button
               key={f.key}
               onClick={() => setStatusFilter(f.key)}
-              className={`text-[12px] font-normal px-1.5 py-0.5 rounded transition-colors ${
+              className={`text-[12px] font-normal px-1.5 py-0.5 rounded-fluent transition-colors ${
                 statusFilter === f.key
-                  ? 'bg-[#E6F4FF] text-[#0099FF]'
-                  : 'text-[#999] hover:text-[#666]'
+                  ? 'bg-fluent-accent-light text-fluent-accent'
+                  : 'text-fluent-text-tertiary hover:text-fluent-text-secondary'
               }`}
             >
               {f.label}
@@ -487,7 +485,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                 // 切换下拉：如果已打开则关闭，否则打开
                 setPriorityFilter((prev) => prev === '_open' ? 'all' : '_open');
               }}
-              className="text-[12px] font-normal px-1.5 py-0.5 rounded flex items-center gap-0.5 text-[#999] hover:text-[#666] transition-colors"
+              className="text-[12px] font-normal px-1.5 py-0.5 rounded-fluent flex items-center gap-0.5 text-fluent-text-tertiary hover:text-fluent-text-secondary transition-colors"
             >
               {priorityFilter === 'all' || priorityFilter === '_open'
                 ? '优先级'
@@ -495,10 +493,10 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
               <ChevronDown size={8} />
             </button>
             {priorityFilter === '_open' && (
-              <div className="absolute right-0 top-full mt-1 z-50 bg-white border border-[#E5E5E5] rounded-lg py-1 shadow-lg min-w-[80px]">
+              <div className="absolute right-0 top-full mt-1 z-50 bg-fluent-surface-flyout border border-fluent-stroke-card rounded-fluent-lg py-1 shadow-fluent-flyout min-w-[80px]">
                 <button
                   onClick={(e) => { e.stopPropagation(); setPriorityFilter('all'); }}
-                  className="w-full text-left text-[12px] font-normal px-3 py-1.5 text-[#555] hover:bg-[#EBEBEB]"
+                  className="w-full text-left text-[12px] font-normal px-3 py-1.5 text-fluent-text-secondary hover:bg-fluent-fill-hover"
                 >
                   全部优先级
                 </button>
@@ -506,7 +504,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                   <button
                     key={key}
                     onClick={(e) => { e.stopPropagation(); setPriorityFilter(key); }}
-                    className="w-full text-left text-[12px] font-normal px-3 py-1.5 text-[#555] hover:bg-[#EBEBEB] flex items-center gap-2"
+                    className="w-full text-left text-[12px] font-normal px-3 py-1.5 text-fluent-text-secondary hover:bg-fluent-fill-hover flex items-center gap-2"
                   >
                     <span className={`w-2 h-2 rounded-full ${PRIORITY_CONFIG[key].color}`} />
                     {PRIORITY_CONFIG[key].label}
@@ -527,7 +525,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
           value={input}
           onChange={(e) => setInput(e.target.value)}
           placeholder="点击右边截图按钮，或输入文字后点＋号，生成待办"
-          className="flex-1 px-3 py-1.5 text-[14px] font-normal text-[#333] placeholder-[#999] rounded-md bg-white border border-[#E5E5E5] outline-none focus:border-[#0099FF] transition-colors"
+          className="input flex-1 px-3 py-1.5 text-[14px]"
         />
         {/* 优先级圆点选择器 */}
         <div className="flex items-center gap-1">
@@ -541,7 +539,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                 PRIORITY_CONFIG[key].color
               } ${
                 priorityPicker === key
-                  ? 'ring-1 ring-gray-400 scale-125'
+                  ? 'ring-1 ring-fluent-text-tertiary scale-125'
                   : 'opacity-40 hover:opacity-80'
               }`}
             />
@@ -549,7 +547,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
         </div>
         <button
           type="submit"
-          className="p-1.5 rounded-md bg-[#F5F5F5] hover:bg-[#EBEBEB] text-gray-500 hover:text-gray-700 transition-colors"
+          className="icon-btn p-1.5"
         >
           <Plus size={14} />
         </button>
@@ -560,7 +558,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
             if (typeof onScreenshot === 'function') onScreenshot();
           }}
           disabled={screenshotStatus === 'capturing' || screenshotStatus === 'analyzing'}
-          className="p-1.5 rounded-md bg-[#F5F5F5] hover:bg-[#EBEBEB] text-gray-500 hover:text-gray-700 transition-colors disabled:opacity-50"
+          className="icon-btn p-1.5"
           title="截图加待办"
         >
           {screenshotStatus === 'capturing' || screenshotStatus === 'analyzing' ? (
@@ -573,7 +571,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
 
       {/* ===== 待办列表 ===== */}
       {filteredTodos.length === 0 ? (
-        <div className="text-[12px] font-normal text-[#ccc] py-2 text-center">
+        <div className="text-[12px] font-normal text-fluent-text-tertiary py-2 text-center">
           {statusFilter === 'all' && priorityFilter === 'all' ? '暂无待办' : '没有符合条件的待办'}
         </div>
       ) : (
@@ -628,15 +626,15 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                     bindWorkspace(todo.id, data.workspaceId);
                   }
                 }}
-                className={`group flex items-center gap-1 h-[30px] pl-0 rounded-md hover:bg-[#EBEBEB] transition-colors ${
+                className={`group flex items-center gap-1 h-[30px] pl-0 rounded-fluent hover:bg-fluent-fill-hover transition-colors ${
                   // 紧急未完成：红色背景 glow
                   todo.priority === 'urgent' && !todo.done ? 'bg-red-50' : ''
-                } ${dropTargetId === todo.id ? 'ring-1 ring-inset ring-[#0099FF] bg-[#E6F4FF]' : ''} ${
+                } ${dropTargetId === todo.id ? 'ring-1 ring-inset ring-fluent-accent bg-fluent-accent-light' : ''} ${
                   todo.isNew ? 'animate-new-todo' : ''
                 }`}
               >
                 {/* 优先级色条 (4px) */}
-                <div className={`w-1 h-full rounded-l-md flex-shrink-0 ${
+                <div className={`w-1 h-full rounded-l-fluent flex-shrink-0 ${
                   pc.color
                 } ${
                   todo.done ? 'opacity-30' : ''
@@ -646,13 +644,13 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                   {/* 复选框 */}
                   <button
                     onClick={() => toggleTodo(todo.id)}
-                    className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
+                    className={`w-4 h-4 rounded-fluent border flex items-center justify-center flex-shrink-0 transition-colors ${
                       todo.done
-                        ? 'bg-[#0099FF] border-[#0099FF]'
-                        : 'border-[#D4D4D4] hover:border-[#0099FF]'
+                        ? 'bg-fluent-accent border-fluent-accent'
+                        : 'border-fluent-stroke-control hover:border-fluent-accent'
                     }`}
                   >
-                    {todo.done && <Check size={10} className="text-white" />}
+                    {todo.done && <Check size={10} className="text-fluent-text-on-accent" />}
                   </button>
 
                   {/* 文字（带 tooltip）/ 编辑输入框 */}
@@ -667,7 +665,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                           if (e.key === 'Escape') { setEditingId(null); setEditValue(''); }
                         }}
                         onBlur={confirmEdit}
-                        className="w-full text-[14px] font-normal text-[#333] bg-white border border-[#0099FF] rounded px-1.5 py-0.5 outline-none"
+                        className="input w-full text-[14px] border-fluent-accent px-1.5 py-0.5"
                       />
                     ) : (
                       <span
@@ -696,7 +694,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                           setEditValue(todo.text);
                         }}
                         className={`block text-[14px] font-normal truncate transition-all cursor-default ${
-                          todo.done ? 'line-through text-[#999]' : 'text-[#333]'
+                          todo.done ? 'line-through text-fluent-text-tertiary' : 'text-fluent-text-primary'
                         }`}
                         title="双击编辑"
                       >
@@ -706,7 +704,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                             return (
                               <>
                                 <span className="font-semibold">{match[1]}</span>
-                                <span className="text-[#999] mx-0.5">：</span>
+                                <span className="text-fluent-text-tertiary mx-0.5">：</span>
                                 <span>{match[2]}</span>
                               </>
                             );
@@ -720,7 +718,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
 
                 {todo.workspaceId && (
                   <span
-                    className="text-[13px] px-1 py-0.5 rounded text-white w-[28px] text-center flex-shrink-0 mr-2 tabular-nums cursor-pointer"
+                    className="text-[11px] rounded-fluent text-fluent-text-on-accent w-[18px] h-[18px] inline-flex items-center justify-center flex-shrink-0 mr-2 tabular-nums leading-none cursor-pointer"
                     title={`${workspaces.find((w) => w.id === todo.workspaceId)?.name || ''}（双击跳转）`}
                     onDoubleClick={(e) => {
                       e.stopPropagation();
@@ -759,7 +757,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                     onKeyDown={(e) => {
                       if (e.key === 'Escape') setReminderPicker(null);
                     }}
-                    className="text-[12px] font-normal text-[#333] px-1 py-0.5 rounded border border-[#0099FF] bg-white w-[130px] flex-shrink-0 outline-none"
+                    className="input text-[12px] px-1 py-0.5 border-fluent-accent w-[130px] flex-shrink-0"
                   />
                 ) : (
                   <span
@@ -770,7 +768,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                       toggleReminderMode(todo);
                     }}
                     title="双击开关｜↑↓/WS±5分｜Shift+↑↓/WS±1时｜←→/AD±1天"
-                    className="text-[12px] font-normal text-[#999] px-1 py-0.5 rounded truncate text-center flex-shrink-0 cursor-pointer select-none transition-all focus:outline-none focus:scale-110 focus:shadow-[0_0_12px_2px_rgba(255,255,255,0.95),0_3px_8px_rgba(0,0,0,0.45)] mr-2 tabular-nums tracking-wide"
+                    className="text-[12px] font-normal text-fluent-text-tertiary px-1 py-0.5 rounded-fluent truncate text-center flex-shrink-0 cursor-pointer select-none transition-all focus:outline-none focus:scale-110 focus:shadow-[0_0_12px_2px_rgba(255,255,255,0.95),0_3px_8px_rgba(0,0,0,0.45)] mr-2 tabular-nums tracking-wide"
                     style={(() => {
                       const c = getReminderColor(todo.reminderTime, reminderLevels);
                       return {
@@ -792,7 +790,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
       {/* ===== Tooltip ===== */}
       {tooltip.show && (
         <div
-          className="fixed z-50 px-2 py-1 text-[12px] font-normal text-[#333] bg-white border border-[#E5E5E5] rounded-md shadow-lg pointer-events-none whitespace-nowrap"
+          className="fixed z-50 px-2 py-1 text-[12px] font-normal text-fluent-text-primary bg-fluent-surface-flyout border border-fluent-stroke-card rounded-fluent shadow-fluent-flyout pointer-events-none whitespace-nowrap"
           style={{
             left: tooltip.x,
             top: tooltip.y,
@@ -800,14 +798,14 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
           }}
         >
           {tooltip.text}
-          <div className="absolute left-1/2 top-full -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-white" />
+          <div className="absolute left-1/2 top-full -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-fluent-surface-flyout" />
         </div>
       )}
 
       {/* ===== 右键菜单 — 设置紧急程度 / 重命名 / 移除项目关联 / 删除 ===== */}
       {contextMenu && (
         <div
-          className="fixed z-[9999] bg-white border border-[#E5E5E5] rounded-lg py-1 shadow-lg min-w-[120px]"
+          className="fixed z-[9999] bg-fluent-surface-flyout border border-fluent-stroke-card rounded-fluent-lg py-1 shadow-fluent-flyout min-w-[120px]"
           style={(() => {
             const menuW = 150;
             const winW = window.innerWidth;
@@ -823,14 +821,14 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                 e.stopPropagation();
                 changePriority(contextMenu.todo.id, key);
               }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-600 hover:bg-[#EBEBEB]"
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-fluent-text-secondary hover:bg-fluent-fill-hover"
             >
               <span className={`w-2.5 h-2.5 rounded-full ${PRIORITY_CONFIG[key].color}`} />
               设为{PRIORITY_CONFIG[key].label}
             </button>
           ))}
 
-          <div className="border-t border-[#E5E5E5] my-1" />
+          <div className="border-t border-fluent-stroke-divider my-1" />
 
           {/* 重命名 */}
           <button
@@ -840,9 +838,9 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
               setEditValue(contextMenu.todo.text);
               setContextMenu(null);
             }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-gray-600 hover:bg-[#EBEBEB]"
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-fluent-text-secondary hover:bg-fluent-fill-hover"
           >
-            <Pencil size={12} className="text-gray-400" />
+            <Pencil size={12} className="text-fluent-text-tertiary" />
             编辑
           </button>
 
@@ -856,9 +854,9 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                     toggleReminderMode(contextMenu.todo);
                     setContextMenu(null);
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-[#555] hover:bg-[#EBEBEB]"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-fluent-text-secondary hover:bg-fluent-fill-hover"
                 >
-                  <span className="text-green-500 text-[11px]">⏰</span>
+                  <span className="text-fluent-success text-[11px]">⏰</span>
                   开启提醒
                 </button>
               );
@@ -871,9 +869,9 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                     setReminderPicker(contextMenu.todo.id);
                     setContextMenu(null);
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-[#555] hover:bg-[#EBEBEB]"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-fluent-text-secondary hover:bg-fluent-fill-hover"
                 >
-                  <span className="text-gray-400 text-[11px]">⏰</span>
+                  <span className="text-fluent-text-tertiary text-[11px]">⏰</span>
                   修改提醒时间
                 </button>
                 <button
@@ -882,9 +880,9 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                     clearReminder(contextMenu.todo.id);
                     setContextMenu(null);
                   }}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-[#555] hover:bg-[#EBEBEB]"
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-fluent-text-secondary hover:bg-fluent-fill-hover"
                 >
-                  <span className="text-gray-400 text-[11px]">✕</span>
+                  <span className="text-fluent-text-tertiary text-[11px]">✕</span>
                   关闭提醒
                 </button>
               </>
@@ -898,14 +896,14 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                 e.stopPropagation();
                 unbindWorkspace(contextMenu.todo.id);
               }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-[#555] hover:bg-[#EBEBEB]"
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-fluent-text-secondary hover:bg-fluent-fill-hover"
             >
-              <span className="w-2.5 h-2.5 rounded-full border border-gray-300 bg-transparent" />
+              <span className="w-2.5 h-2.5 rounded-full border border-fluent-stroke-control bg-transparent" />
               移除项目关联
             </button>
           )}
 
-          <div className="border-t border-[#E5E5E5] my-1" />
+          <div className="border-t border-fluent-stroke-divider my-1" />
 
           {/* 删除 */}
           <button
@@ -914,9 +912,9 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
               removeTodo(contextMenu.todo.id);
               setContextMenu(null);
             }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-red-500 hover:bg-red-50"
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-fluent-danger hover:bg-fluent-fill-hover"
           >
-            <Trash2 size={12} className="text-red-400" />
+            <Trash2 size={12} className="text-fluent-danger" />
             删除
           </button>
         </div>

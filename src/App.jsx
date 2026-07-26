@@ -11,11 +11,11 @@ import AIAssistant from './features/ai/components/AIAssistant';
 import QuickLinks from './features/files/components/QuickLinks';
 import Timeline from './features/reminders/components/Timeline';
 import SettingsPanel from './features/settings/components/SettingsPanel';
-import TrashPanel from './features/trash/components/TrashPanel';
 import RechargeModal from './features/credits/RechargeModal';
 import { DEFAULT_REMINDER_LEVELS } from './features/reminders/components/ReminderLevelSettings';
 import { DEFAULT_AI_SETTINGS } from './config/ai-config';
-import { X, Pin, PinOff, Settings, Trash2 } from 'lucide-react';
+import { DEFAULT_MODULE_VISIBILITY, normalizeModuleVisibility } from './config/module-visibility';
+import { X, Pin, PinOff, Settings } from 'lucide-react';
 import {
   DndContext,
   useSensor,
@@ -39,6 +39,7 @@ export default function App() {
   const [pinned, setPinned] = useState(false);
   const [snapHintEdge, setSnapHintEdge] = useState(null);
   const [reminderLevels, setReminderLevels] = useState(DEFAULT_REMINDER_LEVELS);
+  const [moduleVisibility, setModuleVisibility] = useState(DEFAULT_MODULE_VISIBILITY);
 
   // 数据管理
   const [dataStats, setDataStats] = useState(null);
@@ -234,6 +235,10 @@ export default function App() {
       settings.setFontScale(scale);
     });
 
+    api.storeGet('moduleVisibility', DEFAULT_MODULE_VISIBILITY).then((saved) => {
+      setModuleVisibility(normalizeModuleVisibility(saved));
+    });
+
     // 监听回收站变化
     const onTrashUpdated = () => {
       api.storeGet('trashedWorkspaces', []).then((saved) => trash.setTrashedWorkspaces(saved || []));
@@ -278,6 +283,18 @@ export default function App() {
     setPinned(result.pinned);
   }, []);
 
+  const handleModuleVisibilityChange = async (moduleId, visible) => {
+    const previous = moduleVisibility;
+    const next = { ...moduleVisibility, [moduleId]: visible };
+    setModuleVisibility(next);
+    try {
+      await api.storeSet('moduleVisibility', next);
+    } catch (err) {
+      console.error('保存模块显示设置失败:', err);
+      setModuleVisibility(previous);
+    }
+  };
+
   useEffect(() => {
     const cleanup = api.onPinShortcutTriggered(() => {
       handleTogglePin();
@@ -291,17 +308,16 @@ export default function App() {
   );
 
   return (
-    <div className="h-full flex flex-col bg-white rounded-xl border border-[#E5E5E5] shadow-sm overflow-hidden relative">
+    <div className="h-full flex flex-col rounded-lg overflow-hidden relative">
       {/* 标题栏 */}
-      <div className="flex items-center justify-between px-4 py-2 drag-region">
-        <span className="text-[18px] font-semibold text-[#1a1a1a]">DesktopSecretary</span>
+      <div className="flex items-center justify-end px-4 py-2 drag-region">
         <div className="flex items-center gap-1">
           <button
             onClick={handleTogglePin}
-            className={`p-1 rounded transition-colors ${
+            className={`p-1 rounded-fluent transition-colors ${
               pinned
-                ? 'bg-[#E6F4FF] text-[#0099FF] hover:bg-[#D6EEFF]'
-                : 'hover:bg-[#EBEBEB] text-gray-400 hover:text-gray-600'
+                ? 'bg-fluent-accent-light text-fluent-accent hover:bg-fluent-fill-hover'
+                : 'text-fluent-text-tertiary hover:text-fluent-text-secondary hover:bg-fluent-fill-hover'
             }`}
             title={pinned ? '取消固定' : '固定窗口'}
           >
@@ -309,7 +325,7 @@ export default function App() {
           </button>
           <button
             onClick={() => api.closeApp()}
-            className="p-1 rounded hover:bg-[#EBEBEB] transition-colors text-gray-400 hover:text-gray-600"
+            className="p-1 rounded-fluent transition-colors text-fluent-text-tertiary hover:bg-fluent-danger hover:text-white"
           >
             <X size={14} />
           </button>
@@ -351,50 +367,61 @@ export default function App() {
             }
           }}
         >
-          <div className="px-4 pb-2">
-            <TodoList
-              workspaces={workspaces}
-              activeWorkspace={activeWorkspace}
-              onSwitchWorkspace={setActiveWorkspace}
-              onScreenshot={handleScreenshotAndAnalyze}
-              screenshotStatus={screenshotStatus}
-              reminderLevels={reminderLevels}
-              focusTodoId={focusTodoId}
-            />
-          </div>
+          {moduleVisibility.todos && (
+            <div className="px-4 pb-2">
+              <TodoList
+                workspaces={workspaces}
+                activeWorkspace={activeWorkspace}
+                onSwitchWorkspace={setActiveWorkspace}
+                onScreenshot={handleScreenshotAndAnalyze}
+                screenshotStatus={screenshotStatus}
+                reminderLevels={reminderLevels}
+                focusTodoId={focusTodoId}
+              />
+            </div>
+          )}
 
-          <WorkspaceSwitcher
-            workspaces={workspaces}
-            active={activeWorkspace}
-            onSwitch={setActiveWorkspace}
-            onAdd={addWorkspace}
-            onDelete={deleteWorkspace}
-            onReorder={reorderWorkspaces}
-            onRename={renameWorkspace}
-            onDuplicate={duplicateWorkspace}
-          />
+          {moduleVisibility.workspaces && (
+            <WorkspaceSwitcher
+              workspaces={workspaces}
+              active={activeWorkspace}
+              onSwitch={setActiveWorkspace}
+              onAdd={addWorkspace}
+              onDelete={deleteWorkspace}
+              onReorder={reorderWorkspaces}
+              onRename={renameWorkspace}
+              onDuplicate={duplicateWorkspace}
+            />
+          )}
         </DndContext>
 
-        <Timeline
-          activeWorkspace={activeWorkspace}
-          reminderLevels={reminderLevels}
-          onFocusTodo={setFocusTodoId}
-        />
+        {/* 白色页面容器：与标签条底边齐平相接，激活标签融入页面 */}
+        <div className="flex-1 flex flex-col overflow-hidden bg-fluent-surface-solid pt-2">
+          {moduleVisibility.timeline && (
+            <Timeline
+              activeWorkspace={activeWorkspace}
+              reminderLevels={reminderLevels}
+              onFocusTodo={setFocusTodoId}
+            />
+          )}
 
-        <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-6">
-          <QuickLinks activeWorkspace={activeWorkspace} />
-          <FileNavigator activeWorkspace={activeWorkspace} />
-          <QuickNote />
-          <AIAssistant
-            settings={settings.aiSettings}
-            screenshot={screenshot}
-            screenshotStatus={screenshotStatus}
-            statusMessage={statusMessage}
-            aiResult={aiResult}
-            tokenStats={tokenStats}
-            formatTokens={formatTokens}
-            dailyLimit={DAILY_LIMIT}
-          />
+          <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-6">
+          {moduleVisibility.quickLinks && <QuickLinks activeWorkspace={activeWorkspace} />}
+          {moduleVisibility.fileNavigator && <FileNavigator activeWorkspace={activeWorkspace} />}
+          {moduleVisibility.quickNote && <QuickNote />}
+          {moduleVisibility.aiAssistant && (
+            <AIAssistant
+              settings={settings.aiSettings}
+              screenshot={screenshot}
+              screenshotStatus={screenshotStatus}
+              statusMessage={statusMessage}
+              aiResult={aiResult}
+              tokenStats={tokenStats}
+              formatTokens={formatTokens}
+              dailyLimit={DAILY_LIMIT}
+            />
+          )}
+          </div>
         </div>
 
         {/* 设置面板 */}
@@ -420,12 +447,16 @@ export default function App() {
             settingsSaveMsg={settings.settingsSaveMsg}
             autoLaunch={settings.autoLaunch}
             setAutoLaunch={settings.setAutoLaunch}
+            moduleVisibility={moduleVisibility}
+            onModuleVisibilityChange={handleModuleVisibilityChange}
             reminderLevels={reminderLevels}
             setReminderLevels={setReminderLevels}
             dataStats={dataStats}
             dataActionMsg={dataActionMsg}
             exporting={exporting}
             importing={importing}
+            trashedWorkspaces={trash.trashedWorkspaces}
+            trashedTodos={trash.trashedTodos}
             updateStatus={updateStatus}
             updateInfo={updateInfo}
             handleSaveSettings={settings.handleSaveSettings}
@@ -435,6 +466,11 @@ export default function App() {
             handleTextTest={settings.handleTextTest}
             handleExportData={handleExportData}
             handleImportData={handleImportData}
+            restoreWorkspace={trash.restoreWorkspace}
+            restoreTodo={trash.restoreTodo}
+            permanentlyDeleteWorkspace={trash.permanentlyDeleteWorkspace}
+            permanentlyDeleteTodo={trash.permanentlyDeleteTodo}
+            clearTrash={trash.clearTrash}
             handleCheckUpdate={handleCheckUpdate}
             handleDownloadUpdate={handleDownloadUpdate}
             handleInstallUpdate={handleInstallUpdate}
@@ -443,44 +479,18 @@ export default function App() {
           />
         )}
 
-        {/* 回收站面板 */}
-        {trash.showTrash && (
-          <TrashPanel
-            panelRef={trash.trashPanelRef}
-            fontScale={settings.fontScale}
-            trashedWorkspaces={trash.trashedWorkspaces}
-            trashedTodos={trash.trashedTodos}
-            restoreWorkspace={trash.restoreWorkspace}
-            restoreTodo={trash.restoreTodo}
-            permanentlyDeleteWorkspace={trash.permanentlyDeleteWorkspace}
-            permanentlyDeleteTodo={trash.permanentlyDeleteTodo}
-            clearTrash={trash.clearTrash}
-          />
-        )}
-
         {/* 底部操作栏 */}
-        <div className="flex items-center justify-end px-4 py-1.5 border-t border-[#E5E5E5] gap-1">
-          <button
-            ref={trash.trashButtonRef}
-            onClick={() => { trash.setShowTrash(!trash.showTrash); settings.setShowSettings(false); }}
-            className={`flex items-center px-1.5 py-1 rounded transition-colors ${
-              trash.showTrash ? 'bg-[#E6F4FF] text-[#0099FF]' : 'text-gray-400 hover:text-gray-600 hover:bg-[#EBEBEB]'
-            }`}
-            title="回收站"
-          >
-            <Trash2 size={14} />
-            <span className="text-[12px] font-normal text-[#999] ml-0.5">回收站</span>
-          </button>
+        <div className="flex items-center justify-end px-4 py-1.5 border-t border-fluent-stroke-divider gap-1">
           <button
             ref={settings.settingsButtonRef}
-            onClick={() => { settings.setShowSettings(!settings.showSettings); trash.setShowTrash(false); }}
-            className={`flex items-center px-1.5 py-1 rounded transition-colors ${
-              settings.showSettings ? 'bg-[#E6F4FF] text-[#0099FF]' : 'text-gray-400 hover:text-gray-600 hover:bg-[#EBEBEB]'
+            onClick={() => settings.setShowSettings(!settings.showSettings)}
+            className={`flex items-center px-1.5 py-1 rounded-fluent transition-colors ${
+              settings.showSettings ? 'bg-fluent-accent-light text-fluent-accent' : 'text-fluent-text-tertiary hover:text-fluent-text-secondary hover:bg-fluent-fill-hover'
             }`}
             title="设置"
           >
             <Settings size={14} />
-            <span className="text-[12px] font-normal text-[#999] ml-0.5">设置</span>
+            <span className="text-[12px] font-normal text-fluent-text-tertiary ml-0.5">设置</span>
           </button>
         </div>
       </div>{/* /字号缩放区域 */}

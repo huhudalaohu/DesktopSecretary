@@ -60,7 +60,7 @@ function useOverflowTooltip() {
 
   const TooltipNode = tooltip.show ? (
     <div
-      className="fixed z-50 px-2 py-1 text-[12px] font-normal text-[#333] bg-white border border-[#E5E5E5] rounded-md shadow-lg pointer-events-none whitespace-nowrap"
+      className="fixed z-50 px-2 py-1 text-[12px] font-normal text-fluent-text-primary bg-fluent-surface-flyout border border-fluent-stroke-card rounded-fluent shadow-fluent-flyout pointer-events-none whitespace-nowrap"
       style={{
         left: tooltip.x,
         top: tooltip.y,
@@ -68,7 +68,7 @@ function useOverflowTooltip() {
       }}
     >
       {tooltip.text}
-      <div className="absolute left-1/2 top-full -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-white" />
+      <div className="absolute left-1/2 top-full -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-4 border-l-transparent border-r-transparent border-t-fluent-surface-flyout" />
     </div>
   ) : null;
 
@@ -101,7 +101,7 @@ function FileTypeIcon({ path, size = 18 }) {
   const kind = getFileKind(path);
   const props = { size, className: 'flex-shrink-0' };
   switch (kind) {
-    case 'folder': return <Folder {...props} className={`${props.className} text-[#0099FF]`} />;
+    case 'folder': return <Folder {...props} className={`${props.className} text-fluent-accent`} />;
     case 'image': return <FileImage {...props} className={`${props.className} text-pink-400`} />;
     case 'video': return <FileVideo {...props} className={`${props.className} text-purple-400`} />;
     case 'audio': return <FileMusic {...props} className={`${props.className} text-amber-400`} />;
@@ -287,14 +287,14 @@ export default function FileNavigator({ activeWorkspace }) {
     <div onClick={closeContextMenu}>
       {/* 标题栏 + 视图切换 */}
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[15px] font-semibold text-[#333]">文件导航</span>
+        <span className="text-[15px] font-semibold text-fluent-text-primary">文件导航</span>
         <div className="flex items-center gap-1">
           <button
             onClick={() => handleViewChange('icons')}
-            className={`p-1 rounded transition-colors ${
+            className={`icon-btn ${
               viewMode === 'icons'
-                ? 'bg-[#E6F4FF] text-[#0099FF]'
-                : 'text-gray-400 hover:text-gray-600 hover:bg-[#EBEBEB]'
+                ? 'bg-fluent-accent-light text-fluent-accent hover:bg-fluent-accent-light hover:text-fluent-accent'
+                : ''
             }`}
             title="大图标"
           >
@@ -302,10 +302,10 @@ export default function FileNavigator({ activeWorkspace }) {
           </button>
           <button
             onClick={() => handleViewChange('details')}
-            className={`p-1 rounded transition-colors ${
+            className={`icon-btn ${
               viewMode === 'details'
-                ? 'bg-[#E6F4FF] text-[#0099FF]'
-                : 'text-gray-400 hover:text-gray-600 hover:bg-[#EBEBEB]'
+                ? 'bg-fluent-accent-light text-fluent-accent hover:bg-fluent-accent-light hover:text-fluent-accent'
+                : ''
             }`}
             title="详细信息"
           >
@@ -319,14 +319,14 @@ export default function FileNavigator({ activeWorkspace }) {
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        className={`rounded-lg border p-3 transition-colors ${
+        className={`rounded-fluent-lg border p-3 transition-colors ${
           dropHighlight
-            ? 'bg-blue-50 border-blue-300'
-            : 'bg-white border-[#E5E5E5]'
-        } shadow-sm`}
+            ? 'bg-fluent-accent-light border-fluent-accent-border'
+            : 'bg-fluent-surface-card border-fluent-stroke-card'
+        } shadow-fluent-card`}
       >
         {shortcuts.length === 0 ? (
-          <div className="text-[12px] font-normal text-[#ccc] py-4 text-center">
+          <div className="text-[12px] font-normal text-fluent-text-tertiary py-4 text-center">
             从文件资源管理器拖拽文件、文件夹或快捷方式到此处添加
           </div>
         ) : viewMode === 'icons' ? (
@@ -345,21 +345,21 @@ export default function FileNavigator({ activeWorkspace }) {
                   e.preventDefault();
                   setContextMenu({ x: e.clientX, y: e.clientY, item });
                 }}
-                className={`relative flex flex-col items-center justify-center gap-1 rounded-lg border p-2 cursor-pointer transition-all ${
+                className={`relative flex flex-col items-center justify-center gap-1 rounded-fluent-lg border p-2 cursor-pointer transition-all ${
                   draggingIndex === index
-                    ? 'opacity-40 bg-gray-100 border-dashed border-gray-300'
-                    : 'bg-white border-[#E5E5E5] hover:bg-[#EBEBEB]'
+                    ? 'opacity-40 bg-fluent-fill-hover border-dashed border-fluent-stroke-control'
+                    : 'bg-fluent-surface-solid border-fluent-stroke-card hover:bg-fluent-fill-hover'
                 }`}
               >
                 {dragOverIndex === index && draggingIndex !== index && (
-                  <div className="absolute -left-1 top-2 bottom-2 w-0.5 bg-blue-500 rounded-full shadow-[0_0_10px_rgba(59,130,246,1)] z-10 pointer-events-none" />
+                  <div className="absolute -left-1 top-2 bottom-2 w-0.5 bg-fluent-accent rounded-full shadow-[0_0_10px_rgba(0,120,212,1)] z-10 pointer-events-none" />
                 )}
                 <FileTypeIcon path={item.path} size={24} />
                 <span
                   ref={tooltip.bindRef(item.id)}
                   onMouseEnter={tooltip.handleEnter(item.id, item.name)}
                   onMouseLeave={tooltip.handleLeave}
-                  className="text-[14px] font-normal text-[#333] truncate w-full text-center"
+                  className="text-[14px] font-normal text-fluent-text-primary truncate w-full text-center"
                 >
                   {item.name}
                 </span>
@@ -373,7 +373,7 @@ export default function FileNavigator({ activeWorkspace }) {
               onDrop={(e) => handleDropReorder(e, shortcuts.length)}
             >
               {dragOverIndex === shortcuts.length && (
-                <div className="absolute left-0 top-2 bottom-2 w-0.5 bg-blue-500 rounded-full shadow-[0_0_10px_rgba(59,130,246,1)] z-10 pointer-events-none" />
+                <div className="absolute left-0 top-2 bottom-2 w-0.5 bg-fluent-accent rounded-full shadow-[0_0_10px_rgba(0,120,212,1)] z-10 pointer-events-none" />
               )}
             </div>
           </div>
@@ -393,21 +393,21 @@ export default function FileNavigator({ activeWorkspace }) {
                   e.preventDefault();
                   setContextMenu({ x: e.clientX, y: e.clientY, item });
                 }}
-                className={`relative flex items-center gap-2 h-[44px] px-2 rounded-md border cursor-pointer transition-colors ${
+                className={`relative flex items-center gap-2 h-[44px] px-2 rounded-fluent border cursor-pointer transition-colors ${
                   draggingIndex === index
-                    ? 'opacity-40 bg-gray-100 border-dashed border-gray-300'
-                    : 'bg-white border-[#E5E5E5] hover:bg-[#EBEBEB]'
+                    ? 'opacity-40 bg-fluent-fill-hover border-dashed border-fluent-stroke-control'
+                    : 'bg-fluent-surface-solid border-fluent-stroke-card hover:bg-fluent-fill-hover'
                 }`}
               >
                 {dragOverIndex === index && draggingIndex !== index && (
-                  <div className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 bg-blue-500 rounded-full shadow-[0_0_10px_rgba(59,130,246,1)] z-10 pointer-events-none" />
+                  <div className="absolute -left-1 top-1.5 bottom-1.5 w-0.5 bg-fluent-accent rounded-full shadow-[0_0_10px_rgba(0,120,212,1)] z-10 pointer-events-none" />
                 )}
                 <FileTypeIcon path={item.path} size={18} />
                 <span
                   ref={tooltip.bindRef(item.id)}
                   onMouseEnter={tooltip.handleEnter(item.id, item.name)}
                   onMouseLeave={tooltip.handleLeave}
-                  className="text-[14px] font-normal text-[#333] truncate flex-1 min-w-0"
+                  className="text-[14px] font-normal text-fluent-text-primary truncate flex-1 min-w-0"
                 >
                   {item.name}
                 </span>
@@ -421,7 +421,7 @@ export default function FileNavigator({ activeWorkspace }) {
               onDrop={(e) => handleDropReorder(e, shortcuts.length)}
             >
               {dragOverIndex === shortcuts.length && (
-                <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-blue-500 rounded-full shadow-[0_0_10px_rgba(59,130,246,1)] z-10 pointer-events-none" />
+                <div className="absolute left-0 top-0 bottom-0 w-0.5 bg-fluent-accent rounded-full shadow-[0_0_10px_rgba(0,120,212,1)] z-10 pointer-events-none" />
               )}
             </div>
           </div>
@@ -433,13 +433,13 @@ export default function FileNavigator({ activeWorkspace }) {
       {/* 右键菜单 */}
       {contextMenu && (
         <div
-          className="fixed z-50 bg-white border border-[#E5E5E5] rounded-lg py-1 shadow-lg min-w-[120px]"
+          className="fixed z-50 bg-fluent-surface-flyout border border-fluent-stroke-card rounded-fluent-lg py-1 shadow-fluent-flyout min-w-[120px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
           <button
             onClick={() => handleDelete(contextMenu.item.id)}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-red-500 hover:bg-[#EBEBEB]"
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-[13px] text-fluent-danger hover:bg-fluent-fill-hover"
           >
             <Trash2 size={12} /> 删除快捷方式
           </button>

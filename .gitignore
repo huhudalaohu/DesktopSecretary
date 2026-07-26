@@ -23,3 +23,5 @@ cloudbaserc.json
 # 部署产物/密钥备忘
 *-deploy.zip
 记一下这个项目的各种key和脚本（不要删除、不要上传）.txt
+release-*/
+.playwright-mcp/

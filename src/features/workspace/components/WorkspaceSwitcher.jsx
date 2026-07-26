@@ -1,16 +1,16 @@
 /**
  * WorkspaceSwitcher.jsx — 工作区切换模块（Edge 标签页风格）
  *
- * 顶部横向标签栏，模仿 Edge 浏览器标签页设计：
- * - 梯形圆角标签，上圆下直
- * - 激活标签白底 + 底部蓝线指示
- * - 左侧颜色竖线标识项目序号色
- * - 右侧 × 关闭按钮（hover 显示）
- * - 双击标签重命名
+ * 顶部横向标签栏，对齐 Edge 浏览器标签页逻辑：
+ * - 标签平分可用宽度（flex-1），数量多时均匀压缩，压到最小宽度后才滚动
+ * - 激活标签白底浮起，非激活标签透明底、之间以细分隔线区隔
+ * - 左侧序号是小号浅色徽标（类 favicon），与 TodoList 的 gradientColor 约定一致
+ * - 右侧 × 关闭按钮（hover 显示，激活标签常显）
+ * - 双击标签重命名，拖拽排序，右键菜单（复制/删除）
  */
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, X } from 'lucide-react';
 
 /**
  * 深蓝到浅蓝的渐变插值
@@ -94,13 +94,13 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
         .edge-tabs-scroll::-webkit-scrollbar { height: 4px !important; }
         .edge-tabs-scroll::-webkit-scrollbar-track { background: transparent !important; border-radius: 999px !important; }
         .edge-tabs-scroll::-webkit-scrollbar-thumb { border-radius: 999px !important; background: transparent !important; }
-        .edge-tabs-scroll::-webkit-scrollbar-thumb:hover { background: #D4D4D4 !important; }
+        .edge-tabs-scroll::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.2) !important; }
         .edge-tabs-scroll::-webkit-scrollbar-button { display: none !important; }
       `}</style>
       <div>
         <div
           ref={scrollContainerRef}
-          className="edge-tabs-scroll flex items-end gap-0.5 overflow-x-auto pl-1 pr-2 pt-1.5"
+          className="edge-tabs-scroll flex items-end overflow-x-auto px-1 pt-1.5"
           onContextMenu={(e) => e.preventDefault()}
           onWheel={(e) => {
             if (e.deltaY !== 0) {
@@ -112,6 +112,10 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
           {workspaces.map((ws, index) => {
             const color = gradientColor(index, workspaces.length);
             const isActive = active === ws.id;
+            // Edge 风格分隔线：只出现在两个非激活标签之间
+            const showDivider = !isActive
+              && index < workspaces.length - 1
+              && active !== workspaces[index + 1].id;
 
             return renamingId === ws.id ? (
               <input
@@ -125,7 +129,7 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
                 }}
                 onBlur={handleConfirmRename}
                 onClick={(e) => e.stopPropagation()}
-                className="px-2 py-1 rounded-t-md text-[13px] bg-white text-gray-800 border border-[#0078D4] outline-none w-24"
+                className="input px-2 py-1 rounded-t-fluent rounded-b-none text-[12px] border-fluent-accent w-24 flex-shrink-0"
               />
             ) : (
               <div
@@ -173,33 +177,48 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
                   setContextMenu({ x: e.clientX, y: e.clientY, wsId: ws.id });
                 }}
                 className={`
-                  group relative flex items-center h-7 rounded-t-md text-[13px] select-none cursor-pointer transition-colors overflow-hidden flex-shrink-0
+                  group relative flex items-center flex-1 basis-0 min-w-[48px] max-w-[160px] h-8 rounded-t-fluent-lg text-[12px] select-none cursor-pointer transition-colors overflow-hidden
                   ${dragIndex === index ? 'opacity-40' : ''}
-                  ${dropIndex === index && dragIndex !== index ? 'border-l-2 border-[#0078D4]' : ''}
+                  ${dropIndex === index && dragIndex !== index ? 'border-l-2 border-fluent-accent' : ''}
                   ${isActive
-                    ? 'bg-white text-[#333] font-semibold'
-                    : 'bg-[#E8E8E8] text-[#999] hover:bg-[#DCDCDC] font-normal'
+                    ? 'bg-fluent-surface-solid text-fluent-text-primary shadow-fluent-card'
+                    : 'text-fluent-text-secondary hover:bg-fluent-fill-hover hover:text-fluent-text-primary'
                   }
                 `}
-                style={{ fontFamily: "'D-DIN', sans-serif" }}
                 title={ws.name}
               >
-                {/* 左侧序号区 */}
-                <div
-                  className="h-full w-[18px] flex items-center justify-center flex-shrink-0 transition-colors"
+                {/* 左侧序号徽标（类 favicon：小号浅色底 + 项目色数字） */}
+                <span
+                  className="w-4 h-4 ml-2 flex items-center justify-center flex-shrink-0 rounded-fluent text-[9px] font-bold tabular-nums leading-none"
                   style={{
-                    backgroundColor: isActive ? '#FFFFFF' : color.rgb,
+                    backgroundColor: color.rgb,
+                    color: '#FFFFFF',
                   }}
                 >
-                  <span
-                    className="text-[11px] font-bold tabular-nums leading-none transition-colors"
-                    style={{ color: isActive ? color.rgb : '#FFFFFF' }}
-                  >
-                    {index + 1}
-                  </span>
-                </div>
+                  {index + 1}
+                </span>
                 {/* 项目名称 */}
-                <span className="truncate max-w-[80px] ml-1.5 mr-2">{ws.name}</span>
+                <span className="truncate flex-1 min-w-0 ml-1.5">{ws.name}</span>
+                {/* 关闭按钮：激活标签常显，其余 hover 显示 */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(ws.id);
+                  }}
+                  tabIndex={-1}
+                  title="关闭工作区（移入回收站）"
+                  className={`
+                    flex-shrink-0 w-4 h-4 mr-1.5 rounded-fluent items-center justify-center
+                    text-fluent-text-tertiary hover:bg-fluent-stroke-control hover:text-fluent-text-primary transition-colors
+                    ${isActive ? 'flex' : 'hidden group-hover:flex'}
+                  `}
+                >
+                  <X size={11} />
+                </button>
+                {/* 非激活标签之间的分隔线 */}
+                {showDivider && (
+                  <span className="absolute right-0 top-1/2 -translate-y-1/2 h-4 w-px bg-fluent-stroke-strong pointer-events-none group-hover:opacity-0 transition-opacity" />
+                )}
               </div>
             );
           })}
@@ -216,12 +235,13 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
               }}
               onBlur={submitNewWorkspace}
               placeholder="名称..."
-              className="mb-0.5 px-2 py-1 rounded-t-lg text-[13px] bg-white text-gray-800 border border-[#E0E0E0] outline-none focus:border-[#0078D4] w-20"
+              className="input mb-0.5 px-2 py-1 rounded-t-fluent rounded-b-none text-[12px] w-20 flex-shrink-0"
             />
           ) : (
             <button
               onClick={() => setAdding(true)}
-              className="w-7 h-7 mb-0.5 rounded-full flex items-center justify-center text-[#5F6368] hover:bg-[#E0E0E0] transition-colors flex-shrink-0"
+              title="新建工作区"
+              className="w-7 h-7 mb-0.5 ml-0.5 rounded-fluent flex items-center justify-center flex-shrink-0 text-fluent-text-tertiary hover:bg-fluent-fill-hover hover:text-fluent-text-primary transition-colors"
             >
               <Plus size={14} />
             </button>
@@ -236,7 +256,7 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
               onClick={() => setContextMenu(null)}
             />
             <div
-              className="fixed z-[9999] bg-white border border-[#E5E5E5] rounded-lg py-1 shadow-lg min-w-[80px]"
+              className="fixed z-[9999] bg-fluent-surface-flyout border border-fluent-stroke-card rounded-fluent-lg py-1 shadow-fluent-flyout min-w-[80px]"
               style={{ left: contextMenu.x, top: contextMenu.y }}
             >
               <button
@@ -244,7 +264,7 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
                   if (onDuplicate) onDuplicate(contextMenu.wsId);
                   setContextMenu(null);
                 }}
-                className="w-full text-left text-[11px] px-3 py-1.5 text-gray-600 hover:bg-gray-50"
+                className="w-full text-left text-[11px] px-3 py-1.5 text-fluent-text-secondary hover:bg-fluent-fill-hover"
               >
                 复制
               </button>
@@ -253,7 +273,7 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
                   onDelete(contextMenu.wsId);
                   setContextMenu(null);
                 }}
-                className="w-full text-left text-[11px] px-3 py-1.5 text-red-500 hover:bg-red-50"
+                className="w-full text-left text-[11px] px-3 py-1.5 text-fluent-danger hover:bg-fluent-fill-hover"
               >
                 删除
               </button>

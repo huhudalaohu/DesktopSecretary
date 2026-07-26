@@ -111,9 +111,9 @@ export default function CreditsPanel({ onOpenRecharge }) {
   // 未登录态: 提示去登录(SyncPanel 在上方,用户能直接看到)
   if (!user || !user.uid) {
     return (
-      <section className="bg-white rounded-md p-2.5 space-y-2">
-        <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">积分中心</h3>
-        <div className="text-[10px] text-gray-400 leading-relaxed">
+      <section className="card p-2.5 space-y-2">
+        <h3 className="text-[10px] font-semibold text-fluent-text-secondary uppercase tracking-wider">积分中心</h3>
+        <div className="text-[10px] text-fluent-text-tertiary leading-relaxed">
           登录账号后查看积分余额。新用户注册即送 500 积分。
         </div>
       </section>
@@ -121,13 +121,13 @@ export default function CreditsPanel({ onOpenRecharge }) {
   }
 
   return (
-    <section className="bg-white rounded-md p-2.5 space-y-2">
+    <section className="card p-2.5 space-y-2">
       <div className="flex items-center justify-between">
-        <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">积分中心</h3>
+        <h3 className="text-[10px] font-semibold text-fluent-text-secondary uppercase tracking-wider">积分中心</h3>
         <button
           onClick={refresh}
           disabled={loading}
-          className="p-0.5 rounded hover:bg-[#EBEBEB] text-gray-400 hover:text-gray-600 transition-colors disabled:opacity-50"
+          className="icon-btn p-0.5"
           title="刷新"
         >
           <RotateCw size={10} className={loading ? 'animate-spin' : ''} />
@@ -138,15 +138,15 @@ export default function CreditsPanel({ onOpenRecharge }) {
       <div className="flex items-end justify-between">
         <div className="flex items-baseline gap-1">
           <Coins size={14} className="text-amber-500" />
-          <span className="text-[20px] font-semibold text-gray-800 leading-none">
+          <span className="text-[20px] font-semibold text-fluent-text-primary leading-none">
             {balance == null ? '—' : balance}
           </span>
-          <span className="text-[10px] text-gray-400 ml-1">积分</span>
+          <span className="text-[10px] text-fluent-text-tertiary ml-1">积分</span>
         </div>
         <button
           onClick={onOpenRecharge}
           disabled={!onOpenRecharge}
-          className="px-2 py-0.5 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[9px] transition-colors flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="btn-accent px-2 py-0.5 text-[9px]"
         >
           <Plus size={9} />
           充值
@@ -154,23 +154,23 @@ export default function CreditsPanel({ onOpenRecharge }) {
       </div>
 
       {/* 累计统计 */}
-      <div className="flex items-center justify-between text-[9px] text-gray-400">
+      <div className="flex items-center justify-between text-[9px] text-fluent-text-tertiary">
         <span>累计充值: {totalRecharged}</span>
         <span>累计消耗: {totalConsumed}</span>
       </div>
 
       {error && (
-        <div className="text-[10px] rounded-md px-2 py-1.5 text-red-600 bg-red-50 border border-red-200 flex items-center gap-1">
+        <div className="text-[10px] rounded-fluent px-2 py-1.5 text-fluent-danger bg-red-50 border border-red-200 flex items-center gap-1">
           <AlertCircle size={10} />
           {error}
         </div>
       )}
 
       {/* 最近流水 */}
-      <div className="border-t border-[#F0F0F0] pt-1.5">
-        <div className="text-[9px] text-gray-400 mb-1">最近记录</div>
+      <div className="border-t border-fluent-stroke-divider pt-1.5">
+        <div className="text-[9px] text-fluent-text-tertiary mb-1">最近记录</div>
         {transactions.length === 0 ? (
-          <div className="text-[9px] text-gray-300 py-2 text-center">暂无流水</div>
+          <div className="text-[9px] text-fluent-text-tertiary py-2 text-center">暂无流水</div>
         ) : (
           <ul className="space-y-0.5 max-h-[120px] overflow-y-auto">
             {transactions.map((t, i) => {
@@ -178,15 +178,15 @@ export default function CreditsPanel({ onOpenRecharge }) {
               return (
                 <li
                   key={t._id || `${t.createdAt}-${i}`}
-                  className="flex items-center justify-between gap-1 px-1 py-0.5 rounded hover:bg-[#F5F5F5]"
+                  className="flex items-center justify-between gap-1 px-1 py-0.5 rounded-fluent hover:bg-fluent-fill-hover"
                 >
-                  <span className="text-[10px] text-gray-600 truncate flex-1">{describeTransaction(t)}</span>
+                  <span className="text-[10px] text-fluent-text-secondary truncate flex-1">{describeTransaction(t)}</span>
                   <span className={`text-[10px] font-medium flex-shrink-0 ${
-                    positive ? 'text-green-600' : 'text-gray-700'
+                    positive ? 'text-fluent-success' : 'text-fluent-text-primary'
                   }`}>
                     {positive ? '+' : ''}{t.amount}
                   </span>
-                  <span className="text-[9px] text-gray-300 flex-shrink-0 w-16 text-right">
+                  <span className="text-[9px] text-fluent-text-tertiary flex-shrink-0 w-16 text-right">
                     {formatTime(t.createdAt)}
                   </span>
                 </li>

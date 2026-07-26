@@ -43,14 +43,30 @@ async function ensureUserCredits(db, uid, config) {
   const now = new Date();
 
   if (!exists) {
-    await creditsColl.add({
-      _id: uid,
-      balance: bonus,
-      totalRecharged: bonus,
-      totalConsumed: 0,
-      welcomedAt: now,
-      updatedAt: now,
-    });
+    try {
+      await creditsColl.add({
+        _id: uid,
+        balance: bonus,
+        totalRecharged: bonus,
+        totalConsumed: 0,
+        welcomedAt: now,
+        updatedAt: now,
+      });
+    } catch (err) {
+      // 并发懒初始化:另一个请求已抢先创建(登录/注册后前端会并行发多个请求),
+      // add 撞 _id 唯一键属于正常竞争,不是故障 — 重新读已建好的文档直接返回
+      const retry = await creditsColl.doc(uid).get();
+      const rd = Array.isArray(retry.data) ? retry.data[0] : retry.data;
+      if (rd && rd.welcomedAt) {
+        return {
+          balance: rd.balance || 0,
+          totalRecharged: rd.totalRecharged || 0,
+          totalConsumed: rd.totalConsumed || 0,
+          welcomedAt: rd.welcomedAt,
+        };
+      }
+      throw err;
+    }
   } else {
     // 行已存在但没 welcomedAt(理论上不该出现,兜底)
     await creditsColl.doc(uid).update({

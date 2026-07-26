@@ -17,56 +17,24 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ChevronRight, ChevronDown, Pencil, Trash2, GripVertical, Loader2, X, Circle, Plus } from 'lucide-react';
-import { URL_TITLE_SYSTEM_PROMPT, extractTokens, extractContent, recordTokenUsage } from '../../../config/ai-config';
+import {
+  QUICK_LINK_CATEGORY_SYSTEM_PROMPT,
+  URL_TITLE_SYSTEM_PROMPT,
+  extractTokens,
+  extractContent,
+  recordTokenUsage,
+} from '../../../config/ai-config';
+import {
+  DEFAULT_QUICK_LINK_CATEGORIES,
+  QUICK_LINK_CATEGORIES_STORE_KEY,
+  UNCATEGORIZED_CATEGORY_ID,
+  normalizeQuickLinkCategories,
+} from '../../../config/quick-link-categories';
 import { callAI, CallAIError } from '../../../services/ai-proxy';
 
 const api = window.desktopAPI;
 
-// ===== 预设分组定义 =====
-const DEFAULT_GROUPS = {
-  docs: {
-    name: '文档',
-    expanded: true,
-    links: [],
-  },
-  workflow: {
-    name: '流程系统',
-    expanded: true,
-    links: [],
-  },
-  dataPlatform: {
-    name: '数据平台',
-    expanded: true,
-    links: [],
-  },
-  thirdParty: {
-    name: '第三方工具',
-    expanded: true,
-    links: [],
-  },
-  social: {
-    name: '社交媒体',
-    expanded: true,
-    links: [],
-  },
-  uncategorized: {
-    name: '未分类',
-    expanded: true,
-    links: [],
-  },
-};
-
-const GROUP_ORDER = ['docs', 'workflow', 'dataPlatform', 'thirdParty', 'social', 'uncategorized'];
-
-// 分组色条颜色（用于左侧 2px 色条区分）
-const GROUP_ACCENT = {
-  docs: 'bg-blue-400',
-  workflow: 'bg-amber-400',
-  dataPlatform: 'bg-cyan-400',
-  thirdParty: 'bg-purple-400',
-  social: 'bg-pink-400',
-  uncategorized: 'bg-gray-300',
-};
+const GROUP_ACCENTS = ['bg-blue-400', 'bg-cyan-400', 'bg-amber-400', 'bg-pink-400', 'bg-purple-400'];
 
 // ===== 并发控制 =====
 const MAX_CONCURRENT = 2;
@@ -119,91 +87,70 @@ function getFaviconUrl(url) {
   return `https://www.google.com/s2/favicons?sz=32&domain=${domain}`;
 }
 
-function classifyUrl(hostname, pathname) {
-  const h = hostname.toLowerCase();
-  const p = (pathname || '').toLowerCase();
+const LEGACY_CATEGORY_TARGETS = {
+  docs: 'work',
+  workflow: 'work',
+  dataPlatform: 'work',
+  thirdParty: 'tools',
+  social: 'tools',
+};
 
-  // ===== 文档类 =====
-  // 飞书 / Lark
-  if (h.includes('feishu.cn') || h.includes('feishu.com') || h.includes('larksuite.com') || h.includes('larkoffice.com')) return 'docs';
-  // 腾讯文档
-  if (h.includes('docs.qq.com') || h.includes('sheets.qq.com') || h.includes('drive.qq.com') || h.includes('slides.qq.com') || h.includes('doc.weixin.qq.com')) return 'docs';
-  // Google Docs / Drive
-  if (h.includes('docs.google.com') || h.includes('drive.google.com') || h.includes('docs.googleusercontent.com')) return 'docs';
-  // Microsoft Office / OneDrive / SharePoint
-  if (h.includes('office.com') || h.includes('sharepoint.com') || h.includes('onedrive.live.com') || h.includes('live.com')) return 'docs';
-  // 石墨文档
-  if (h.includes('shimo.im')) return 'docs';
-  // WPS / 金山文档
-  if (h.includes('kdocs.cn') || h.includes('wps.cn') || h.includes('365docs.cn') || h.includes('docer.wps.cn')) return 'docs';
-  // Confluence / Atlassian
-  if (h.includes('confluence.') || h.includes('atlassian.net') || h.includes('jira.')) return 'docs';
-  // Notion
-  if (h.includes('notion.so') || h.includes('notion.site')) return 'docs';
-  // 语雀
-  if (h.includes('yuque.com') || h.includes('yuque.antgroup.com')) return 'docs';
-  // Coda
-  if (h.includes('coda.io')) return 'docs';
-  // Dropbox Paper
-  if (h.includes('paper.dropbox.com') || h.includes('dropbox.com/paper')) return 'docs';
-  // HackMD
-  if (h.includes('hackmd.io')) return 'docs';
-  // 腾讯乐享
-  if (h.includes('lexiangla.com')) return 'docs';
-  // 钉钉文档
-  if (h.includes('alidocs.dingtalk.com') || h.includes('docs.dingtalk.com')) return 'docs';
-  // 百度文库/百度网盘文档
-  if (h.includes('wenku.baidu.com') || h.includes('pan.baidu.com')) return 'docs';
-  // 有道云笔记
-  if (h.includes('note.youdao.com')) return 'docs';
-  // 印象笔记 / Evernote
-  if (h.includes('evernote.com') || h.includes('yinxiang.com')) return 'docs';
-  // 腾讯微云
-  if (h.includes('weiyun.com')) return 'docs';
-  // 阿里云盘
-  if (h.includes('aliyundrive.com') || h.includes('alipan.com')) return 'docs';
-  // 飞书多维表格 / 知识库 等路径特征
-  if (/\/(docx|wiki|sheets?|base|minutes|mindnotes|file|drive|doc|slide|document|spreadsheets?|presentation|白板|whiteboard)\//i.test(p)) return 'docs';
+function reconcileGroups(savedGroups, categories) {
+  const source = savedGroups && typeof savedGroups === 'object' && !Array.isArray(savedGroups)
+    ? savedGroups
+    : {};
+  const categoryIds = new Set(categories.map((category) => category.id));
+  const groups = Object.fromEntries(categories.map((category) => {
+    const current = source[category.id] || {};
+    return [category.id, {
+      expanded: typeof current.expanded === 'boolean' ? current.expanded : true,
+      links: Array.isArray(current.links) ? current.links : [],
+    }];
+  }));
 
-  // ===== 流程系统 =====
-  if (h.startsWith('oa.') || h.includes('.oa.')) return 'workflow';
-  if (h.includes('bpm.') || h.includes('.bpm.')) return 'workflow';
-  if (h.includes('approval') || h.includes('审批') || h.includes('shenpi')) return 'workflow';
-  if (h.includes('workflow') || h.includes('.workflow.')) return 'workflow';
-  if (h.includes('process') || h.includes('.process.')) return 'workflow';
-  if (h.includes('flow') || h.includes('.flow.')) return 'workflow';
+  for (const [groupId, group] of Object.entries(source)) {
+    if (categoryIds.has(groupId)) continue;
+    const links = Array.isArray(group?.links) ? group.links : [];
+    const preferredId = LEGACY_CATEGORY_TARGETS[groupId];
+    const targetId = preferredId && categoryIds.has(preferredId)
+      ? preferredId
+      : UNCATEGORIZED_CATEGORY_ID;
+    groups[targetId].links.push(...links);
+  }
 
-  // ===== 数据平台 =====
-  if (h.includes('bi.') || h.includes('.bi.')) return 'dataPlatform';
-  if (h.includes('data.') || h.includes('.data.')) return 'dataPlatform';
-  if (h.includes('dashboard') || h.includes('.dashboard.')) return 'dataPlatform';
-  if (h.includes('grafana') || h.includes('kibana') || h.includes('metabase')) return 'dataPlatform';
-  if (h.includes('superset') || h.includes('tableau') || h.includes('powerbi') || h.includes('power-bi')) return 'dataPlatform';
-  if (h.includes('dataplat') || h.includes('data-platform') || h.includes('data_platform')) return 'dataPlatform';
-  if (h.includes('analytics') || h.includes('.analytics.')) return 'dataPlatform';
-  if (h.includes('report') || h.includes('.report.')) return 'dataPlatform';
-  if (h.includes('clickhouse') || h.includes('hive') || h.includes('presto') || h.includes('spark')) return 'dataPlatform';
-  if (h.includes('dolphinscheduler') || h.includes('airflow') || h.includes('azkaban')) return 'dataPlatform';
+  return groups;
+}
 
-  // ===== 第三方工具 / 内容平台 =====
-  // 社交媒体
-  if (h.includes('bilibili.com') || h.includes('bilibili.cn') || h.includes('b23.tv')) return 'social';
-  if (h.includes('xiaohongshu.com') || h.includes('xhslink.com')) return 'social';
-  if (h.includes('zhihu.com')) return 'social';
-  if (h.includes('douyin.com') || h.includes('iesdouyin.com')) return 'social';
-  if (h.includes('weibo.com') || h.includes('weibo.cn')) return 'social';
-  // 第三方工具 / 内容平台
-  if (h.includes('csdn.net') || h.includes('csdn.com')) return 'thirdParty';
-  if (h.includes('github.com')) return 'thirdParty';
-  if (h.includes('juejin.cn')) return 'thirdParty';
-  if (h.includes('youku.com')) return 'thirdParty';
-  if (h.includes('iqiyi.com')) return 'thirdParty';
-  if (h.includes('v.qq.com')) return 'thirdParty';
-  if (h.includes('taobao.com') || h.includes('tmall.com')) return 'thirdParty';
-  if (h.includes('jd.com')) return 'thirdParty';
-  if (h.includes('moonshot.cn') || h.includes('kimi.moonshot.cn')) return 'thirdParty';
+function moveAndUpdateLink(groups, sourceGroupId, targetGroupId, linkId, finalData) {
+  if (!groups?.[sourceGroupId]) return groups;
+  const sourceLinks = groups[sourceGroupId].links || [];
+  const link = sourceLinks.find((item) => item.id === linkId);
+  if (!link) return groups;
 
-  return 'uncategorized';
+  const safeTargetId = groups[targetGroupId] ? targetGroupId : UNCATEGORIZED_CATEGORY_ID;
+  const finalLink = { ...link, ...finalData };
+  if (safeTargetId === sourceGroupId) {
+    return {
+      ...groups,
+      [sourceGroupId]: {
+        ...groups[sourceGroupId],
+        links: sourceLinks.map((item) => item.id === linkId ? finalLink : item),
+      },
+    };
+  }
+
+  return {
+    ...groups,
+    [sourceGroupId]: {
+      ...groups[sourceGroupId],
+      links: sourceLinks.filter((item) => item.id !== linkId),
+    },
+    [safeTargetId]: {
+      ...groups[safeTargetId],
+      expanded: true,
+      links: [...(groups[safeTargetId].links || []), finalLink],
+    },
+  };
 }
 
 function getPathPrefixHint(url) {
@@ -423,6 +370,42 @@ async function resolveTitleWithAI(url) {
   return null;
 }
 
+async function classifyLinkWithAI({ url, title, categories }) {
+  const availableCategories = categories.filter((category) => category.id !== UNCATEGORIZED_CATEGORY_ID);
+  if (availableCategories.length === 0) return UNCATEGORIZED_CATEGORY_ID;
+
+  try {
+    const data = await callAI({
+      mode: 'fast',
+      messages: [
+        { role: 'system', content: QUICK_LINK_CATEGORY_SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            url,
+            title: title || '',
+            categories: availableCategories.map(({ id, name }) => ({ id, name })),
+          }),
+        },
+      ],
+      max_tokens: 16,
+    });
+    const content = extractContent(data).trim().replace(/^['"`]|['"`]$/g, '');
+    if (content) {
+      const tokensUsed = extractTokens(data, content);
+      await recordTokenUsage(api, tokensUsed);
+    }
+    return availableCategories.some((category) => category.id === content)
+      ? content
+      : UNCATEGORIZED_CATEGORY_ID;
+  } catch (err) {
+    if (err instanceof CallAIError && err.code !== 'NOT_LOGGED_IN' && err.code !== 'INSUFFICIENT_CREDITS') {
+      console.error('[AI Category] 识别失败:', err.code, err.message);
+    }
+    return UNCATEGORIZED_CATEGORY_ID;
+  }
+}
+
 function timeoutFallback(url) {
   const prefix = getPathPrefixHint(url);
   const pathName = guessTitleFromPath(url);
@@ -454,16 +437,16 @@ function SourceBadge({ source }) {
   const b = badges[source];
   if (!b) return null;
   const colors = {
-    green: ['text-green-500', 'bg-green-500'],
-    blue: ['text-blue-500', 'bg-blue-500'],
+    green: ['text-fluent-success', 'bg-fluent-success'],
+    blue: ['text-fluent-accent', 'bg-fluent-accent'],
     purple: ['text-purple-500', 'bg-purple-500'],
     gray: ['text-gray-400', 'bg-gray-400'],
-    orange: ['text-orange-500', 'bg-orange-500'],
-    red: ['text-red-500', 'bg-red-500'],
+    orange: ['text-fluent-warning', 'bg-fluent-warning'],
+    red: ['text-fluent-danger', 'bg-fluent-danger'],
   };
   const [textCls, dotCls] = colors[b[1]] || colors.gray;
   return (
-    <span className={`flex items-center gap-0.5 text-[11px] font-normal text-[#999] flex-shrink-0`}>
+    <span className={`flex items-center gap-0.5 text-[11px] font-normal text-fluent-text-tertiary flex-shrink-0`}>
       <span className={`w-1.5 h-1.5 rounded-full ${dotCls} inline-block`} />
       {b[0]}
     </span>
@@ -471,11 +454,12 @@ function SourceBadge({ source }) {
 }
 
 function SkeletonBar() {
-  return <div className="h-3 bg-[#E5E5E5] rounded animate-pulse" style={{ width: '60%' }} />;
+  return <div className="h-3 bg-fluent-fill-hover rounded animate-pulse" style={{ width: '60%' }} />;
 }
 
 export default function QuickLinks({ activeWorkspace }) {
   const [groups, setGroups] = useState(null);
+  const [categories, setCategories] = useState(DEFAULT_QUICK_LINK_CATEGORIES);
   const [addingStatus, setAddingStatus] = useState('');
   const [contextMenu, setContextMenu] = useState(null);
   const [editingId, setEditingId] = useState(null);
@@ -513,29 +497,6 @@ export default function QuickLinks({ activeWorkspace }) {
   // 存储键按工作区分隔
   const storeKey = `quickLinks:${activeWorkspace}`;
 
-  // 旧数据迁移：把 feishu+tencent → docs，oa → workflow
-  function migrateGroups(saved) {
-    if (!saved) return null;
-    const hasOldKeys = saved.feishu || saved.tencent || saved.oa;
-    if (!hasOldKeys) return saved;
-    const migrated = { ...DEFAULT_GROUPS };
-    const docsLinks = [
-      ...(saved.feishu?.links || []),
-      ...(saved.tencent?.links || []),
-      ...(saved.thirdParty?.links || []),
-    ];
-    if (docsLinks.length > 0) {
-      migrated.docs = { ...migrated.docs, links: docsLinks };
-    }
-    if (saved.oa?.links?.length > 0) {
-      migrated.workflow = { ...migrated.workflow, links: saved.oa.links };
-    }
-    if (saved.uncategorized?.links?.length > 0) {
-      migrated.uncategorized = { ...migrated.uncategorized, links: saved.uncategorized.links };
-    }
-    return migrated;
-  }
-
   useEffect(() => {
     // 切换工作区时清理定时器和状态
     Object.values(timersRef.current).forEach(clearInterval);
@@ -544,30 +505,44 @@ export default function QuickLinks({ activeWorkspace }) {
     setLoadingIds(new Set());
     setCountdowns({});
 
-    api.storeGet(storeKey, {}).then((saved) => {
-      if (!saved || Object.keys(saved).length === 0) {
-        setGroups(DEFAULT_GROUPS);
-        api.storeSet(storeKey, DEFAULT_GROUPS);
-      } else {
-        const migrated = migrateGroups(saved);
-        let final = migrated !== saved ? migrated : saved;
-        // 补齐新增分组（如社交媒体）
-        let needsUpdate = false;
-        for (const [key, def] of Object.entries(DEFAULT_GROUPS)) {
-          if (!final[key]) {
-            final = { ...final, [key]: def };
-            needsUpdate = true;
-          }
-        }
-        setGroups(final);
-        if (needsUpdate || migrated !== saved) {
-          api.storeSet(storeKey, final);
-        }
+    let cancelled = false;
+    const load = async () => {
+      const savedCategories = await api.storeGet(QUICK_LINK_CATEGORIES_STORE_KEY, null);
+      const nextCategories = normalizeQuickLinkCategories(savedCategories);
+      if (savedCategories === null) {
+        await api.storeSet(QUICK_LINK_CATEGORIES_STORE_KEY, nextCategories);
       }
-    });
+
+      const savedGroups = await api.storeGet(storeKey, {});
+      const nextGroups = reconcileGroups(savedGroups, nextCategories);
+      if (cancelled) return;
+
+      setCategories(nextCategories);
+      setGroups(nextGroups);
+      if (JSON.stringify(savedGroups) !== JSON.stringify(nextGroups)) {
+        await api.storeSet(storeKey, nextGroups);
+      }
+    };
+    load();
     return () => {
+      cancelled = true;
       Object.values(timersRef.current).forEach(clearInterval);
     };
+  }, [storeKey]);
+
+  useEffect(() => {
+    const handleCategoriesUpdated = async (event) => {
+      const nextCategories = normalizeQuickLinkCategories(event.detail);
+      const savedGroups = await api.storeGet(storeKey, {});
+      const nextGroups = reconcileGroups(savedGroups, nextCategories);
+      setCategories(nextCategories);
+      setGroups(nextGroups);
+      if (JSON.stringify(savedGroups) !== JSON.stringify(nextGroups)) {
+        await api.storeSet(storeKey, nextGroups);
+      }
+    };
+    window.addEventListener('quick-link-categories-updated', handleCategoriesUpdated);
+    return () => window.removeEventListener('quick-link-categories-updated', handleCategoriesUpdated);
   }, [storeKey]);
 
   // 加载全局快捷图标（不随工作区变化）
@@ -656,29 +631,16 @@ export default function QuickLinks({ activeWorkspace }) {
     }
   };
 
-  // 更新链接（识别完成后）
-  const updateLink = (groupId, tempId, finalData) => {
+  // 完成识别后更新链接，并移动到 AI 匹配的分类。
+  const finalizeLink = (sourceGroupId, targetGroupId, tempId, finalData) => {
     setGroups((prev) => {
       if (!prev) return prev;
-      return {
-        ...prev,
-        [groupId]: {
-          ...prev[groupId],
-          links: prev[groupId].links.map((l) => l.id === tempId ? { ...l, ...finalData } : l),
-        },
-      };
+      return moveAndUpdateLink(prev, sourceGroupId, targetGroupId, tempId, finalData);
     });
     // 异步保存
     api.storeGet(storeKey, {}).then((latest) => {
-      if (!latest || !latest[groupId]) return;
-      const updated = {
-        ...latest,
-        [groupId]: {
-          ...latest[groupId],
-          links: latest[groupId].links.map((l) => l.id === tempId ? { ...l, ...finalData } : l),
-        },
-      };
-      api.storeSet(storeKey, updated);
+      if (!latest || !latest[sourceGroupId]) return;
+      api.storeSet(storeKey, moveAndUpdateLink(latest, sourceGroupId, targetGroupId, tempId, finalData));
     });
   };
 
@@ -703,17 +665,18 @@ export default function QuickLinks({ activeWorkspace }) {
       if (!/^https?:\/\//.test(url)) url = 'https://' + url;
     }
 
-    let hostname, pathname;
-    try { const u = new URL(url); hostname = u.hostname; pathname = u.pathname; } catch { return; }
+    try { new URL(url); } catch { return; }
 
     // URL 去重
     if (isDuplicateUrl(url)) return;
 
-    const groupId = classifyUrl(hostname, pathname);
     const tempId = genId();
 
     // 0层命中
     if (preParsedTitle) {
+      setAddingStatus('fetching');
+      const classifiedGroupId = await classifyLinkWithAI({ url, title: preParsedTitle, categories });
+      const groupId = groups[classifiedGroupId] ? classifiedGroupId : UNCATEGORIZED_CATEGORY_ID;
       const finalLink = {
         id: tempId, url, title: preParsedTitle, addedAt: today(),
         favicon: getFaviconUrl(url), titleSource: 'clipboard-split',
@@ -735,7 +698,11 @@ export default function QuickLinks({ activeWorkspace }) {
     };
     const updatedWithTemp = {
       ...groups,
-      [groupId]: { ...groups[groupId], expanded: true, links: [...(groups[groupId]?.links || []), tempLink] },
+      [UNCATEGORIZED_CATEGORY_ID]: {
+        ...groups[UNCATEGORIZED_CATEGORY_ID],
+        expanded: true,
+        links: [...(groups[UNCATEGORIZED_CATEGORY_ID]?.links || []), tempLink],
+      },
     };
     await saveGroups(updatedWithTemp);
     setAddingStatus('fetching');
@@ -757,18 +724,34 @@ export default function QuickLinks({ activeWorkspace }) {
       // 检查是否已被取消
       if (cancelledRef.current.has(tempId)) {
         cancelledRef.current.delete(tempId);
-        releaseSlot();
+        return;
+      }
+
+      const classifiedGroupId = await classifyLinkWithAI({ url, title, categories });
+      if (cancelledRef.current.has(tempId)) {
+        cancelledRef.current.delete(tempId);
         return;
       }
 
       stopCountdown(tempId);
-      updateLink(groupId, tempId, { title, favicon: favicon || getFaviconUrl(url), titleSource: source });
+      finalizeLink(
+        UNCATEGORIZED_CATEGORY_ID,
+        classifiedGroupId,
+        tempId,
+        { title, favicon: favicon || getFaviconUrl(url), titleSource: source },
+      );
       setAddingStatus('done');
       setTimeout(() => { setAddingStatus(''); if (inputRef.current) inputRef.current.value = ''; }, 1500);
     } catch {
       stopCountdown(tempId);
       const fallbackTitle = guessTitleFromPath(url);
-      updateLink(groupId, tempId, { title: fallbackTitle, titleSource: 'fallback' });
+      const classifiedGroupId = await classifyLinkWithAI({ url, title: fallbackTitle, categories });
+      finalizeLink(
+        UNCATEGORIZED_CATEGORY_ID,
+        classifiedGroupId,
+        tempId,
+        { title: fallbackTitle, titleSource: 'fallback' },
+      );
       setAddingStatus('done');
       setTimeout(() => { setAddingStatus(''); if (inputRef.current) inputRef.current.value = ''; }, 1500);
     } finally {
@@ -965,7 +948,6 @@ export default function QuickLinks({ activeWorkspace }) {
       const { title, favicon, source } = await resolveTitle(url);
       if (globalCancelledRef.current.has(tempId)) {
         globalCancelledRef.current.delete(tempId);
-        releaseSlot();
         return false;
       }
       stopGlobalCountdown(tempId);
@@ -1071,11 +1053,29 @@ export default function QuickLinks({ activeWorkspace }) {
 
   return (
     <div>
-      <div className="text-[15px] font-semibold text-[#333] mb-2">快速入口</div>
+      <div className="text-[15px] font-semibold text-fluent-text-primary mb-2">快速入口</div>
 
-      <div className="rounded-lg bg-white border border-[#E5E5E5] p-2.5 shadow-sm">
+      <div className="card p-2.5">
+        {/* 粘贴链接识别 */}
+        <div className="mb-2">
+          <input
+            ref={inputRef}
+            type="text"
+            placeholder="粘贴链接，自动识别并命名"
+            onPaste={handlePaste}
+            onKeyDown={handleInputKeydown}
+            className="input w-full px-2.5 py-1.5 text-[14px] font-normal"
+          />
+          {addingStatus === 'fetching' && (
+            <div className="text-[11px] font-normal text-fluent-accent mt-1 px-1">正在获取信息...</div>
+          )}
+          {addingStatus === 'done' && (
+            <div className="text-[11px] font-normal text-fluent-success mt-1 px-1">已添加</div>
+          )}
+        </div>
+
         {/* 全局快捷图标栏 */}
-        {globalNotice && <div className="mb-1 text-[11px] font-normal text-amber-500">{globalNotice}</div>}
+        {globalNotice && <div className="mb-1 text-[11px] font-normal text-fluent-warning">{globalNotice}</div>}
         <div className="mb-2">
           <div className="flex flex-wrap gap-2 content-start max-h-[102px] overflow-hidden">
             {globalIcons.map((icon, index) => {
@@ -1096,7 +1096,7 @@ export default function QuickLinks({ activeWorkspace }) {
                     }}
                     onBlur={confirmEditGlobalIcon}
                     onClick={(e) => e.stopPropagation()}
-                    className="w-24 px-2 py-1 rounded-md text-[14px] font-normal text-[#333] bg-white border border-[#0099FF] outline-none flex-shrink-0"
+                    className="input w-24 text-[14px] font-normal border-fluent-accent flex-shrink-0"
                   />
                 );
               }
@@ -1105,15 +1105,15 @@ export default function QuickLinks({ activeWorkspace }) {
                 return (
                   <div
                     key={icon.id}
-                    className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-white border border-[#E5E5E5] flex-shrink-0 min-w-[80px]"
+                    className="flex items-center gap-1.5 px-2 py-1 rounded-fluent bg-fluent-surface-solid border border-fluent-stroke-card flex-shrink-0 min-w-[80px]"
                   >
                     <SkeletonBar />
-                    <span className="text-[11px] font-normal text-[#0099FF] flex-shrink-0">
+                    <span className="text-[11px] font-normal text-fluent-accent flex-shrink-0">
                       {cd !== undefined ? `${cd}s` : '...'}
                     </span>
                     <button
                       onClick={(e) => { e.stopPropagation(); cancelGlobalRecognition(icon.id); }}
-                      className="p-0.5 rounded hover:bg-[#EBEBEB] text-gray-300 hover:text-red-500 transition-colors flex-shrink-0"
+                      className="p-0.5 rounded-fluent hover:bg-fluent-fill-hover text-fluent-text-tertiary hover:text-fluent-danger transition-colors flex-shrink-0"
                       title="取消识别"
                     >
                       <X size={10} />
@@ -1158,9 +1158,9 @@ export default function QuickLinks({ activeWorkspace }) {
                     setContextMenu({ x: e.clientX, y: e.clientY, type: 'globalIcon', icon });
                   }}
                   onClick={() => !isLoading && api.openExternal(icon.url)}
-                  className={`group flex items-center gap-1.5 px-2 py-1 rounded-md bg-white border border-[#E5E5E5] hover:bg-[#EBEBEB] cursor-pointer transition-colors flex-shrink-0 ${
+                  className={`group flex items-center gap-1.5 px-2 py-1 rounded-fluent bg-fluent-surface-solid border border-fluent-stroke-card hover:bg-fluent-fill-hover cursor-pointer transition-colors flex-shrink-0 ${
                     globalDragIndex === index ? 'opacity-30' : ''
-                  } ${globalDropIndex === index && globalDragIndex !== index ? 'border-l-2 border-blue-400' : ''}`}
+                  } ${globalDropIndex === index && globalDragIndex !== index ? 'border-l-2 border-fluent-accent' : ''}`}
                   title={icon.url}
                 >
                   <img
@@ -1169,7 +1169,7 @@ export default function QuickLinks({ activeWorkspace }) {
                     className="w-4 h-4 rounded-sm flex-shrink-0"
                     onError={(e) => { e.target.style.display = 'none'; }}
                   />
-                  <span className={`text-xs truncate max-w-[80px] ${icon.titleSource === 'error-not-found' ? 'text-red-400 line-through' : 'text-gray-700'}`}>
+                  <span className={`text-xs truncate max-w-[80px] ${icon.titleSource === 'error-not-found' ? 'text-fluent-danger line-through' : 'text-fluent-text-secondary'}`}>
                     {icon.title}
                   </span>
                 </div>
@@ -1206,7 +1206,7 @@ export default function QuickLinks({ activeWorkspace }) {
                   }}
                   onClick={(e) => e.stopPropagation()}
                   placeholder="输入链接..."
-                  className="w-28 px-2 py-1 rounded-md text-[14px] font-normal text-[#333] bg-white border border-[#0099FF] outline-none flex-shrink-0"
+                  className="input w-28 text-[14px] font-normal border-fluent-accent flex-shrink-0"
                 />
               </form>
             ) : (
@@ -1229,12 +1229,12 @@ export default function QuickLinks({ activeWorkspace }) {
                   handleGlobalDrop(e);
                 }}
                 disabled={globalIcons.length >= 15}
-                className={`flex-shrink-0 flex items-center justify-center h-[28px] px-2 min-w-[60px] rounded-md border border-dashed transition-colors ${
+                className={`flex-shrink-0 flex items-center justify-center h-[28px] px-2 min-w-[60px] rounded-fluent border border-dashed transition-colors ${
                   globalIcons.length >= 15
-                    ? 'bg-[#F5F5F5] border-[#E5E5E5] text-gray-300 cursor-not-allowed'
+                    ? 'bg-fluent-fill-hover border-fluent-stroke-card text-fluent-text-tertiary cursor-not-allowed'
                     : dropHighlight
-                      ? 'bg-blue-50 border-blue-400 text-blue-500'
-                      : 'bg-white border-[#D4D4D4] text-gray-400 hover:border-[#0099FF] hover:text-[#0099FF]'
+                      ? 'bg-fluent-accent-light border-fluent-accent text-fluent-accent'
+                      : 'bg-fluent-surface-solid border-fluent-stroke-control text-fluent-text-tertiary hover:border-fluent-accent hover:text-fluent-accent'
                 }`}
                 title={globalIcons.length >= 15 ? '最多 3 行，请先删除部分图标' : '点击添加或拖拽链接至此'}
               >
@@ -1242,33 +1242,18 @@ export default function QuickLinks({ activeWorkspace }) {
               </button>
             )}
           </div>
-          <div className="border-b border-[#E5E5E5] mt-1" />
-        </div>
-
-        {/* 快速添加输入框 */}
-        <div className="mb-2">
-          <input
-            ref={inputRef}
-            type="text"
-            placeholder="粘贴链接，自动识别并命名"
-            onPaste={handlePaste}
-            onKeyDown={handleInputKeydown}
-            className="w-full bg-white border border-[#E5E5E5] rounded-md px-2.5 py-1.5 text-[14px] font-normal text-[#333] placeholder-[#999] outline-none focus:border-[#0099FF] transition-colors"
-          />
-          {addingStatus === 'fetching' && (
-            <div className="text-[11px] font-normal text-blue-500 mt-1 px-1">正在获取信息...</div>
-          )}
-          {addingStatus === 'done' && (
-            <div className="text-[11px] font-normal text-green-500 mt-1 px-1">已添加</div>
-          )}
+          <div className="border-b border-fluent-stroke-divider mt-1" />
         </div>
 
         {/* 手风琴分组列表 */}
-        {GROUP_ORDER.map((groupId) => {
+        {categories.map((category, index) => {
+          const groupId = category.id;
           const group = groups[groupId];
           if (!group) return null;
           const linkCount = group.links.length;
-          const accent = GROUP_ACCENT[groupId] || GROUP_ACCENT.uncategorized;
+          const accent = groupId === UNCATEGORIZED_CATEGORY_ID
+            ? 'bg-gray-300'
+            : GROUP_ACCENTS[index % GROUP_ACCENTS.length];
 
           return (
             <div key={groupId} className="mb-0.5">
@@ -1280,22 +1265,22 @@ export default function QuickLinks({ activeWorkspace }) {
                   e.dataTransfer.dropEffect = 'move';
                 }}
                 onDrop={(e) => handleGroupDrop(e, groupId)}
-                className="flex items-center gap-1 px-1.5 py-1 rounded hover:bg-[#EBEBEB] cursor-pointer transition-colors select-none group/header"
+                className="flex items-center gap-1 px-1.5 py-1 rounded-fluent hover:bg-fluent-fill-hover cursor-pointer transition-colors select-none group/header"
               >
                 <span className={`w-1.5 h-1.5 rounded-full ${accent} flex-shrink-0`} />
                 {group.expanded ? (
-                  <ChevronDown size={11} className="text-gray-400 flex-shrink-0" />
+                  <ChevronDown size={11} className="text-fluent-text-tertiary flex-shrink-0" />
                 ) : (
-                  <ChevronRight size={11} className="text-gray-400 flex-shrink-0" />
+                  <ChevronRight size={11} className="text-fluent-text-tertiary flex-shrink-0" />
                 )}
-                <span className="text-[13px] font-semibold text-[#555] flex-1 truncate">{group.name}</span>
-                <span className="text-[11px] font-normal text-[#bbb] flex-shrink-0">{linkCount}</span>
+                <span className="text-[13px] font-semibold text-fluent-text-secondary flex-1 truncate">{category.name}</span>
+                <span className="text-[11px] font-normal text-fluent-text-tertiary flex-shrink-0">{linkCount}</span>
               </div>
 
               {group.expanded && (
-                <div className="ml-3 border-l border-[#E5E5E5]">
+                <div className="ml-3 border-l border-fluent-stroke-divider">
                   {linkCount === 0 ? (
-                    <div className="text-[12px] font-normal text-[#ccc] py-1 px-2 ml-1">
+                    <div className="text-[12px] font-normal text-fluent-text-tertiary py-1 px-2 ml-1">
                       暂无快捷方式，粘贴链接即可添加
                     </div>
                   ) : (
@@ -1321,7 +1306,7 @@ export default function QuickLinks({ activeWorkspace }) {
                             e.preventDefault();
                             setContextMenu({ x: e.clientX, y: e.clientY, groupId, link });
                           }}
-                          className="group flex items-center gap-1.5 px-1.5 py-[3px] rounded hover:bg-[#EBEBEB] transition-colors cursor-pointer relative"
+                          className="group flex items-center gap-1.5 px-1.5 py-[3px] rounded-fluent hover:bg-fluent-fill-hover transition-colors cursor-pointer relative"
                           onDoubleClick={() => !isLoading && api.openExternal(link.url)}
                           title={link.url}
                         >
@@ -1342,12 +1327,12 @@ export default function QuickLinks({ activeWorkspace }) {
                           {isLoading && !isTimedOut ? (
                             <>
                               <SkeletonBar />
-                              <span className="text-[11px] font-normal text-[#0099FF] flex-shrink-0">
+                              <span className="text-[11px] font-normal text-fluent-accent flex-shrink-0">
                                 {cd !== undefined ? `${cd}s` : '...'}
                               </span>
                               <button
                                 onClick={(e) => { e.stopPropagation(); cancelRecognition(link.id, groupId); }}
-                                className="p-0.5 rounded hover:bg-[#EBEBEB] text-gray-300 hover:text-red-500 transition-colors flex-shrink-0"
+                                className="p-0.5 rounded-fluent hover:bg-fluent-fill-hover text-fluent-text-tertiary hover:text-fluent-danger transition-colors flex-shrink-0"
                                 title="取消识别"
                               >
                                 <X size={10} />
@@ -1366,12 +1351,12 @@ export default function QuickLinks({ activeWorkspace }) {
                               autoFocus
                               onClick={(e) => e.stopPropagation()}
                               placeholder="输入名称..."
-                              className="flex-1 bg-white border border-[#0099FF] rounded px-1 py-0.5 text-sm text-gray-800 placeholder-gray-400 outline-none min-w-0"
+                              className="input flex-1 px-1 py-0.5 text-sm border-fluent-accent min-w-0"
                             />
                           ) : (
                             <>
                               <span className={`flex-1 text-sm truncate min-w-0 ${
-                                link.titleSource === 'error-not-found' ? 'text-red-400 line-through' : 'text-gray-700'
+                                link.titleSource === 'error-not-found' ? 'text-fluent-danger line-through' : 'text-fluent-text-secondary'
                               }`}>
                                 {link.title}
                               </span>
@@ -1384,13 +1369,13 @@ export default function QuickLinks({ activeWorkspace }) {
                             <div className="flex items-center gap-0.5 flex-shrink-0 ml-0.5">
                               <button
                                 onClick={(e) => { e.stopPropagation(); startEdit(link); }}
-                                className="p-0.5 rounded hover:bg-[#EBEBEB] text-gray-300 hover:text-blue-500 transition-colors"
+                                className="p-0.5 rounded-fluent hover:bg-fluent-fill-hover text-fluent-text-tertiary hover:text-fluent-accent transition-colors"
                               >
                                 <Pencil size={10} />
                               </button>
                               <button
                                 onClick={(e) => { e.stopPropagation(); deleteLink(groupId, link.id); }}
-                                className="p-0.5 rounded hover:bg-[#EBEBEB] text-gray-300 hover:text-red-500 transition-colors"
+                                className="p-0.5 rounded-fluent hover:bg-fluent-fill-hover text-fluent-text-tertiary hover:text-fluent-danger transition-colors"
                               >
                                 <Trash2 size={10} />
                               </button>
@@ -1409,7 +1394,7 @@ export default function QuickLinks({ activeWorkspace }) {
         {/* 右键上下文菜单 */}
         {contextMenu && (
           <div
-            className="ql-context-menu fixed z-50 bg-white border border-[#E5E5E5] rounded-lg shadow-lg py-1 min-w-[130px]"
+            className="ql-context-menu fixed z-50 bg-fluent-surface-flyout border border-fluent-stroke-card rounded-fluent-lg shadow-fluent-flyout py-1 min-w-[130px]"
             style={{ left: contextMenu.x, top: contextMenu.y }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -1418,7 +1403,7 @@ export default function QuickLinks({ activeWorkspace }) {
                 <>
                   <button
                     onClick={() => { cancelGlobalRecognition(contextMenu.icon.id); setContextMenu(null); }}
-                    className="w-full text-left px-3 py-1.5 text-[13px] text-red-500 hover:bg-[#EBEBEB] transition-colors"
+                    className="w-full text-left px-3 py-1.5 text-[13px] text-fluent-danger hover:bg-fluent-fill-hover transition-colors"
                   >
                     取消识别
                   </button>
@@ -1427,14 +1412,14 @@ export default function QuickLinks({ activeWorkspace }) {
                 <>
                   <button
                     onClick={() => { setEditingGlobalId(contextMenu.icon.id); setEditingGlobalTitle(contextMenu.icon.title); setContextMenu(null); }}
-                    className="w-full text-left px-3 py-1.5 text-[13px] text-[#555] hover:bg-[#EBEBEB] transition-colors"
+                    className="w-full text-left px-3 py-1.5 text-[13px] text-fluent-text-primary hover:bg-fluent-fill-hover transition-colors"
                   >
                     编辑名称
                   </button>
-                  <div className="border-t border-[#E5E5E5] my-1" />
+                  <div className="border-t border-fluent-stroke-divider my-1" />
                   <button
                     onClick={() => deleteGlobalIcon(contextMenu.icon.id)}
-                    className="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-[#EBEBEB] transition-colors"
+                    className="w-full text-left px-3 py-1.5 text-xs text-fluent-danger hover:bg-fluent-fill-hover transition-colors"
                   >
                     删除
                   </button>
@@ -1444,14 +1429,14 @@ export default function QuickLinks({ activeWorkspace }) {
               <>
                 <button
                   onClick={() => startEdit(contextMenu.link)}
-                  className="w-full text-left px-3 py-1.5 text-xs text-gray-600 hover:bg-[#EBEBEB] transition-colors"
+                  className="w-full text-left px-3 py-1.5 text-xs text-fluent-text-primary hover:bg-fluent-fill-hover transition-colors"
                 >
                   编辑名称
                 </button>
-                <div className="border-t border-[#E5E5E5] my-1" />
+                <div className="border-t border-fluent-stroke-divider my-1" />
                 <button
                   onClick={() => deleteLink(contextMenu.groupId, contextMenu.link.id)}
-                  className="w-full text-left px-3 py-1.5 text-xs text-red-500 hover:bg-[#EBEBEB] transition-colors"
+                  className="w-full text-left px-3 py-1.5 text-xs text-fluent-danger hover:bg-fluent-fill-hover transition-colors"
                 >
                   删除
                 </button>

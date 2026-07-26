@@ -1,26 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 
 export function useTrash(api, workspaces, setWorkspaces) {
-  const [showTrash, setShowTrash] = useState(false);
   const [trashedWorkspaces, setTrashedWorkspaces] = useState([]);
   const [trashedTodos, setTrashedTodos] = useState([]);
-
-  const trashPanelRef = useRef(null);
-  const trashButtonRef = useRef(null);
-
-  // 点击面板/按钮之外任意处自动收起
-  useEffect(() => {
-    if (!showTrash) return;
-    const onMouseDown = (e) => {
-      const panel = trashPanelRef.current;
-      const btn = trashButtonRef.current;
-      if (panel && panel.contains(e.target)) return;
-      if (btn && btn.contains(e.target)) return;
-      setShowTrash(false);
-    };
-    document.addEventListener('mousedown', onMouseDown);
-    return () => document.removeEventListener('mousedown', onMouseDown);
-  }, [showTrash]);
 
   const restoreWorkspace = async (ws) => {
     const updated = [...workspaces, ws];
@@ -61,14 +43,10 @@ export function useTrash(api, workspaces, setWorkspaces) {
   };
 
   return {
-    showTrash,
-    setShowTrash,
     trashedWorkspaces,
     setTrashedWorkspaces,
     trashedTodos,
     setTrashedTodos,
-    trashPanelRef,
-    trashButtonRef,
     restoreWorkspace,
     restoreTodo,
     permanentlyDeleteWorkspace,

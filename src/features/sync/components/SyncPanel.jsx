@@ -351,24 +351,24 @@ export default function SyncPanel() {
   // 已登录
   if (status.isLoggedIn) {
     return (
-      <section className="bg-white rounded-md p-2.5 space-y-2">
-        <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">账号与同步</h3>
+      <section className="card p-2.5 space-y-2">
+        <h3 className="text-[10px] font-semibold text-fluent-text-secondary uppercase tracking-wider">账号与同步</h3>
 
         <div className="flex items-center gap-1.5">
-          <User size={12} className="text-[#0099FF]" />
-          <span className="text-[10px] text-gray-700 font-medium">{status.username}</span>
-          <span className="text-[9px] text-green-500 ml-auto flex items-center gap-0.5">
+          <User size={12} className="text-fluent-accent" />
+          <span className="text-[10px] text-fluent-text-primary font-medium">{status.username}</span>
+          <span className="text-[9px] text-fluent-success ml-auto flex items-center gap-0.5">
             <Cloud size={9} />
             已登录
           </span>
         </div>
 
         <div className="flex items-center justify-between">
-          <span className="text-[9px] text-gray-400">上次同步: {formatLastSync(lastSync)}</span>
+          <span className="text-[9px] text-fluent-text-tertiary">上次同步: {formatLastSync(lastSync)}</span>
           <button
             onClick={handleSyncNow}
             disabled={syncing}
-            className="px-2 py-0.5 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[9px] transition-colors disabled:opacity-50 flex items-center gap-1"
+            className="btn-accent px-2 py-0.5 text-[9px]"
           >
             {syncing ? <RotateCw size={9} className="animate-spin" /> : <Cloud size={9} />}
             {syncing ? '同步中...' : '立即同步'}
@@ -378,17 +378,17 @@ export default function SyncPanel() {
         <button
           onClick={handleLogout}
           disabled={loading}
-          className="w-full py-1 rounded bg-[#F5F5F5] hover:bg-[#EBEBEB] text-gray-500 text-[9px] transition-colors disabled:opacity-50 flex items-center justify-center gap-1 border border-[#E5E5E5]"
+          className="btn w-full py-1 text-[9px]"
         >
           <LogOut size={9} />
           退出登录
         </button>
 
         {message && (
-          <div className={`text-[10px] rounded-md px-2 py-1.5 flex items-center gap-1 ${
+          <div className={`text-[10px] rounded-fluent px-2 py-1.5 flex items-center gap-1 ${
             message.type === 'success'
-              ? 'text-green-600 bg-green-50 border border-green-200'
-              : 'text-red-600 bg-red-50 border border-red-200'
+              ? 'text-fluent-success bg-green-50 border border-green-200'
+              : 'text-fluent-danger bg-red-50 border border-red-200'
           }`}>
             {message.type === 'success' ? <CheckCircle size={10} /> : <AlertCircle size={10} />}
             {message.text}
@@ -406,10 +406,10 @@ export default function SyncPanel() {
   ];
 
   return (
-    <section className="bg-white rounded-md p-2.5 space-y-2">
-      <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">账号与同步</h3>
+    <section className="card p-2.5 space-y-2">
+      <h3 className="text-[10px] font-semibold text-fluent-text-secondary uppercase tracking-wider">账号与同步</h3>
 
-      <div className="text-[9px] text-gray-400 leading-relaxed">
+      <div className="text-[9px] text-fluent-text-tertiary leading-relaxed">
         新用户注册即送 500 积分,登录后可使用 AI 功能。
       </div>
 
@@ -418,8 +418,8 @@ export default function SyncPanel() {
           <button
             key={t.id}
             onClick={() => { setMode(t.id); setMessage(null); }}
-            className={`flex-1 py-0.5 rounded text-[9px] transition-colors ${
-              mode === t.id ? 'bg-[#0099FF] text-white' : 'bg-[#F5F5F5] text-gray-500 hover:bg-[#EBEBEB]'
+            className={`flex-1 py-0.5 rounded-fluent text-[9px] transition-colors ${
+              mode === t.id ? 'bg-fluent-accent-light text-fluent-accent' : 'text-fluent-text-secondary hover:bg-fluent-fill-hover'
             }`}
           >
             {t.label}
@@ -433,7 +433,7 @@ export default function SyncPanel() {
           value={username}
           onChange={(e) => setUsername(e.target.value)}
           placeholder="邮箱地址"
-          className="w-full px-2 py-1 text-[10px] rounded bg-white border border-[#E5E5E5] text-gray-800 placeholder-gray-300 outline-none focus:border-[#0099FF]"
+          className="input w-full text-[10px]"
         />
 
         {(mode === 'login-password' || mode === 'register') && (
@@ -442,7 +442,7 @@ export default function SyncPanel() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder={mode === 'register' ? '密码 (至少6位)' : '密码'}
-            className="w-full px-2 py-1 text-[10px] rounded bg-white border border-[#E5E5E5] text-gray-800 placeholder-gray-300 outline-none focus:border-[#0099FF]"
+            className="input w-full text-[10px]"
           />
         )}
 
@@ -452,7 +452,7 @@ export default function SyncPanel() {
             value={confirmPassword}
             onChange={(e) => setConfirmPassword(e.target.value)}
             placeholder="确认密码"
-            className="w-full px-2 py-1 text-[10px] rounded bg-white border border-[#E5E5E5] text-gray-800 placeholder-gray-300 outline-none focus:border-[#0099FF]"
+            className="input w-full text-[10px]"
           />
         )}
 
@@ -463,12 +463,12 @@ export default function SyncPanel() {
               value={code}
               onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
               placeholder="6位邮箱验证码"
-              className="flex-1 px-2 py-1 text-[10px] rounded bg-white border border-[#E5E5E5] text-gray-800 placeholder-gray-300 outline-none focus:border-[#0099FF]"
+              className="input flex-1 text-[10px]"
             />
             <button
               onClick={handleSendCode}
               disabled={sendingCode || countdown > 0}
-              className="px-2 py-1 rounded bg-[#F5F5F5] hover:bg-[#EBEBEB] text-gray-500 text-[9px] transition-colors disabled:opacity-50 border border-[#E5E5E5] flex items-center gap-1 whitespace-nowrap"
+              className="btn text-[9px] whitespace-nowrap"
             >
               <Mail size={9} />
               {countdown > 0 ? `${countdown}s` : (sendingCode ? '发送中...' : '获取验证码')}
@@ -482,9 +482,9 @@ export default function SyncPanel() {
               type="checkbox"
               checked={importLocalData}
               onChange={(e) => setImportLocalData(e.target.checked)}
-              className="w-3 h-3 rounded border-gray-300 text-[#0099FF] focus:ring-[#0099FF]"
+              className="w-3 h-3 rounded-fluent border-fluent-stroke-control text-fluent-accent focus:ring-fluent-accent"
             />
-            <span className="text-[9px] text-gray-500">将当前本地数据同步到新账户</span>
+            <span className="text-[9px] text-fluent-text-secondary">将当前本地数据同步到新账户</span>
           </label>
         )}
       </div>
@@ -492,16 +492,16 @@ export default function SyncPanel() {
       <button
         onClick={handleSubmit}
         disabled={loading}
-        className="w-full py-1 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[10px] transition-colors disabled:opacity-50 flex items-center justify-center gap-1"
+        className="btn-accent w-full py-1 text-[10px]"
       >
         {loading ? '处理中...' : (mode === 'register' ? '注册' : '登录')}
       </button>
 
       {message && (
-        <div className={`text-[10px] rounded-md px-2 py-1.5 flex items-center gap-1 ${
+        <div className={`text-[10px] rounded-fluent px-2 py-1.5 flex items-center gap-1 ${
           message.type === 'success'
-            ? 'text-green-600 bg-green-50 border border-green-200'
-            : 'text-red-600 bg-red-50 border border-red-200'
+            ? 'text-fluent-success bg-green-50 border border-green-200'
+            : 'text-fluent-danger bg-red-50 border border-red-200'
         }`}>
           {message.type === 'success' ? <CheckCircle size={10} /> : <AlertCircle size={10} />}
           {message.text}

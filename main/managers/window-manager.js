@@ -27,13 +27,15 @@ class WindowManager {
     const { BrowserWindow, app, session } = require('electron');
 
     // CloudBase 域名直连,不经过系统代理(避免 Clash 代理超时)
+    // 注意:身份认证 API 域名是 *.tcb-api.tencentcloudapi.com,更新源是 *.cos.*.myqcloud.com,
+    // 都不属于 tcloudbase.com,必须一并直连,否则登录失败、自动更新检查不到新版本
     const proxyUrl = process.env.PROXY_URL || 'http://127.0.0.1:7897';
     const proxyHost = proxyUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
     if (proxyHost) {
-      const pacScript = `function FindProxyForURL(u,h){if(h.includes('tcloudbase.com'))return'DIRECT';if(h==='localhost'||h==='127.0.0.1')return'DIRECT';return'PROXY ${proxyHost}';}`;
+      const pacScript = `function FindProxyForURL(u,h){if(h.includes('tcloudbase.com'))return'DIRECT';if(h.includes('tencentcloudapi.com'))return'DIRECT';if(h.includes('myqcloud.com'))return'DIRECT';if(h==='localhost'||h==='127.0.0.1')return'DIRECT';return'PROXY ${proxyHost}';}`;
       const pacDataUrl = 'data:application/x-ns-proxy-autoconfig;base64,' + Buffer.from(pacScript).toString('base64');
       session.defaultSession.setProxy({ mode: 'pac_script', pacScript: pacDataUrl });
-      console.log('[Window] PAC proxy: tcloudbase.com → DIRECT, 其它 →', proxyHost);
+      console.log('[Window] PAC proxy: tcloudbase/tencentcloudapi/myqcloud → DIRECT, 其它 →', proxyHost);
     }
 
     this.mainWindow = new BrowserWindow(this.platform.windowOptions.mainWindowOptions({

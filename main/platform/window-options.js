@@ -30,6 +30,10 @@ function mainWindowOptions(base) {
     opts.trafficLightPosition = { x: -100, y: -100 }; // 隐藏红绿灯
   } else {
     opts.frame = false;
+    // Windows：不透明窗口 + 统一浅灰底色（与标签条同色，Mica 会随焦点透出壁纸色，用户不接受，弃用）
+    opts.transparent = false;
+    opts.backgroundColor = '#F0F0F0';
+    opts.hasShadow = true;
   }
   return opts;
 }

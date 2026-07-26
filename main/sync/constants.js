@@ -8,6 +8,7 @@ const SYNC_KEYS = [
   'todosGlobal',
   'pinnedFolders',
   'linkCache',
+  'quickLinkCategories',
   'reminderLevels',
   'trashedWorkspaces',
   'trashedTodos',

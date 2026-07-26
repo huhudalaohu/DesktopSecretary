@@ -1,12 +1,26 @@
-import React from 'react';
+import React, { useState } from 'react';
 import SyncPanel from '../../sync/components/SyncPanel';
 import CreditsPanel from '../../credits/CreditsPanel';
 import ReminderLevelSettings from '../../reminders/components/ReminderLevelSettings';
+import TrashPanel from '../../trash/components/TrashPanel';
+import QuickLinkCategorySettings from '../../files/components/QuickLinkCategorySettings';
 import { AI_MODE_OPTIONS } from '../../../config/ai-config';
+import { MODULE_VISIBILITY_OPTIONS } from '../../../config/module-visibility';
 import { CURRENT_APP_VERSION } from '../../../hooks/useAutoUpdate';
 import {
   RotateCw, Download, CheckCircle, ArrowUpCircle, AlertCircle,
+  SlidersHorizontal, Gauge, Cloud, Sparkles, Database, Info, Trash2,
 } from 'lucide-react';
+
+const SETTINGS_CATEGORIES = [
+  { id: 'general', label: '常规', Icon: SlidersHorizontal },
+  { id: 'efficiency', label: '效率', Icon: Gauge },
+  { id: 'account', label: '账号', Icon: Cloud },
+  { id: 'ai', label: 'AI', Icon: Sparkles },
+  { id: 'data', label: '数据', Icon: Database },
+  { id: 'trash', label: '回收站', Icon: Trash2 },
+  { id: 'about', label: '关于', Icon: Info },
+];
 
 export default function SettingsPanel({
   panelRef,
@@ -29,12 +43,16 @@ export default function SettingsPanel({
   settingsSaveMsg,
   autoLaunch,
   setAutoLaunch,
+  moduleVisibility,
+  onModuleVisibilityChange,
   reminderLevels,
   setReminderLevels,
   dataStats,
   dataActionMsg,
   exporting,
   importing,
+  trashedWorkspaces,
+  trashedTodos,
   updateStatus,
   updateInfo,
   // handlers
@@ -45,6 +63,11 @@ export default function SettingsPanel({
   handleTextTest,
   handleExportData,
   handleImportData,
+  restoreWorkspace,
+  restoreTodo,
+  permanentlyDeleteWorkspace,
+  permanentlyDeleteTodo,
+  clearTrash,
   handleCheckUpdate,
   handleDownloadUpdate,
   handleInstallUpdate,
@@ -53,28 +76,51 @@ export default function SettingsPanel({
   // 充值弹窗触发(模态框在 App.jsx 根级渲染,避免被 SettingsPanel 的 overflow 裁剪)
   onOpenRecharge,
 }) {
+  const [activeCategory, setActiveCategory] = useState('general');
   const currentMode = aiSettings.mode || 'fast';
 
   return (
     <div
       ref={panelRef}
       style={{ zoom: 1 / fontScale }}
-      className="mx-4 mb-2 rounded-lg bg-[#F0F0F0] border border-[#D4D4D4] p-3 space-y-3 shadow-md max-h-[50vh] overflow-y-auto"
+      className="card mx-4 mb-2 h-[50vh] p-2.5 overflow-hidden flex flex-col"
     >
       {/* 设置标题 */}
-      <div className="flex items-center justify-between px-1">
-        <h2 className="text-sm font-semibold text-gray-700 tracking-wide">设置</h2>
-        <span className="text-[9px] text-gray-400">Desktop Secretary</span>
+      <div className="flex items-center justify-between px-1 pb-2 shrink-0">
+        <h2 className="text-sm font-semibold text-fluent-text-primary tracking-wide">设置</h2>
+        <span className="text-[9px] text-fluent-text-tertiary">Desktop Secretary</span>
       </div>
 
+      <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 flex-1 min-h-0">
+        <nav aria-label="设置分类" className="rounded-fluent-lg bg-fluent-fill-subtle border border-fluent-stroke-card p-1 space-y-0.5">
+          {SETTINGS_CATEGORIES.map(({ id, label, Icon }) => {
+            const active = activeCategory === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setActiveCategory(id)}
+                className={`w-full h-8 px-1.5 rounded-fluent flex items-center gap-1.5 text-[10px] transition-colors ${
+                  active
+                    ? 'bg-fluent-surface-solid text-fluent-accent shadow-fluent-card'
+                    : 'text-fluent-text-secondary hover:bg-fluent-fill-hover hover:text-fluent-text-primary'
+                }`}
+              >
+                <Icon size={12} strokeWidth={active ? 2.2 : 1.8} />
+                <span>{label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="min-w-0 overflow-y-auto pr-0.5 space-y-3">
+
+          <div className={activeCategory === 'general' ? 'space-y-3' : 'hidden'}>
       {/* ===== 通用设置 ===== */}
-      <section className="bg-white rounded-md p-2.5 space-y-2">
-        <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">通用</h3>
-        <div className="text-[10px] text-gray-400 leading-relaxed">
-          拖动顶部标题栏可移动窗口。靠近屏幕边缘自动吸附并收起；浮空时可调整尺寸。
-        </div>
+      <section className="card p-2.5 space-y-2">
+        <h3 className="text-[10px] font-semibold text-fluent-text-secondary uppercase tracking-wider">通用</h3>
         <div className="flex items-center justify-between">
-          <span className="text-[10px] text-gray-500">开机自动启动</span>
+          <span className="text-[10px] text-fluent-text-secondary">开机自动启动</span>
           <button
             onClick={async () => {
               const next = !autoLaunch;
@@ -82,7 +128,7 @@ export default function SettingsPanel({
               await api.setAutoLaunch(next);
             }}
             className={`relative w-9 h-5 rounded-full transition-colors ${
-              autoLaunch ? 'bg-[#0099FF]' : 'bg-gray-300'
+              autoLaunch ? 'bg-fluent-accent' : 'bg-fluent-text-tertiary'
             }`}
           >
             <span
@@ -93,7 +139,7 @@ export default function SettingsPanel({
           </button>
         </div>
         <div className="flex items-center justify-between">
-          <span className="text-[10px] text-gray-500">界面字号</span>
+          <span className="text-[10px] text-fluent-text-secondary">界面字号</span>
           <div className="flex gap-1">
             {[
               { label: '小', value: 0.9 },
@@ -106,10 +152,10 @@ export default function SettingsPanel({
                   setFontScale(opt.value);
                   await api.storeSet('fontScale', opt.value);
                 }}
-                className={`px-2 py-0.5 rounded text-[10px] transition-colors ${
+                className={`px-2 py-0.5 rounded-fluent text-[10px] transition-colors ${
                   Math.abs(fontScale - opt.value) < 0.01
-                    ? 'bg-[#0099FF] text-white'
-                    : 'bg-[#F5F5F5] text-gray-600 hover:bg-[#EBEBEB]'
+                    ? 'bg-fluent-accent-light text-fluent-accent'
+                    : 'text-fluent-text-secondary hover:bg-fluent-fill-hover'
                 }`}
               >
                 {opt.label}
@@ -119,15 +165,48 @@ export default function SettingsPanel({
         </div>
       </section>
 
-      <SyncPanel />
+      {/* ===== 模块显示 ===== */}
+      <section className="card p-2.5 space-y-1">
+        <h3 className="text-[10px] font-semibold text-fluent-text-secondary uppercase tracking-wider mb-2">模块显示</h3>
+        {MODULE_VISIBILITY_OPTIONS.map((module) => {
+          const visible = moduleVisibility?.[module.id] !== false;
+          return (
+            <div key={module.id} className="flex items-center justify-between py-0.5">
+              <span className="text-[10px] text-fluent-text-secondary">{module.label}</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={visible}
+                aria-label={`${module.label}${visible ? '已显示' : '已隐藏'}`}
+                onClick={() => onModuleVisibilityChange(module.id, !visible)}
+                className={`relative w-9 h-5 rounded-full transition-colors ${
+                  visible ? 'bg-fluent-accent' : 'bg-fluent-text-tertiary'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
+                    visible ? 'translate-x-4' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          );
+        })}
+      </section>
 
-      <CreditsPanel onOpenRecharge={onOpenRecharge} />
+          </div>
 
+          <div className={activeCategory === 'account' ? 'space-y-3' : 'hidden'}>
+            <SyncPanel />
+            <CreditsPanel onOpenRecharge={onOpenRecharge} />
+          </div>
+
+          <div className={activeCategory === 'ai' ? 'space-y-3' : 'hidden'}>
       {/* ===== AI 配置(v2:平台垫付) ===== */}
-      <section className="bg-white rounded-md p-2.5 space-y-2">
-        <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">AI 模式</h3>
+      <section className="card p-2.5 space-y-2">
+        <h3 className="text-[10px] font-semibold text-fluent-text-secondary uppercase tracking-wider">AI 模式</h3>
 
-        <div className="text-[10px] text-gray-400 leading-relaxed">
+        <div className="text-[10px] text-fluent-text-tertiary leading-relaxed">
           AI 调用由平台统一垫付,按上游 token 用量扣积分。无需配置 API Key。
         </div>
 
@@ -136,10 +215,10 @@ export default function SettingsPanel({
             <button
               key={opt.value}
               onClick={() => setAiSettings({ ...aiSettings, mode: opt.value })}
-              className={`flex-1 py-1 rounded text-[10px] transition-colors ${
+              className={`flex-1 py-1 rounded-fluent text-[10px] transition-colors ${
                 currentMode === opt.value
-                  ? 'bg-[#0099FF] text-white'
-                  : 'bg-[#F5F5F5] text-gray-500 hover:bg-[#EBEBEB]'
+                  ? 'bg-fluent-accent-light text-fluent-accent'
+                  : 'text-fluent-text-secondary hover:bg-fluent-fill-hover'
               }`}
               title={opt.desc}
             >
@@ -148,7 +227,7 @@ export default function SettingsPanel({
           ))}
         </div>
 
-        <div className="text-[9px] text-gray-400">
+        <div className="text-[9px] text-fluent-text-tertiary">
           {AI_MODE_OPTIONS.find((o) => o.value === currentMode)?.desc}
         </div>
 
@@ -156,53 +235,53 @@ export default function SettingsPanel({
         <div className="flex gap-1 pt-1">
           <button
             onClick={handleSaveSettings}
-            className="flex-1 py-1 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[10px] transition-colors"
+            className="btn-accent flex-1 !py-1 !text-[10px]"
           >
             保存
           </button>
         </div>
         {settingsSaveMsg && (
-          <div className={`text-[10px] rounded-md px-2 py-1.5 ${
+          <div className={`text-[10px] rounded-fluent px-2 py-1.5 ${
             settingsSaveMsg.type === 'success'
-              ? 'text-green-600 bg-green-50 border border-green-200'
-              : 'text-red-600 bg-red-50 border border-red-200'
+              ? 'text-fluent-success bg-green-50 border border-green-200'
+              : 'text-fluent-danger bg-red-50 border border-red-200'
           }`}>
             {settingsSaveMsg.text}
           </div>
         )}
 
         {/* 测试 */}
-        <div className="border-t border-[#F0F0F0] pt-2 space-y-2">
+        <div className="border-t border-fluent-stroke-divider pt-2 space-y-2">
           <div className="flex gap-1">
             <button
               onClick={handleTestConnection}
               disabled={testing}
-              className="flex-1 py-1 rounded bg-green-50 hover:bg-green-100 text-green-600 text-[10px] transition-colors disabled:opacity-50 border border-green-200"
+              className="flex-1 py-1 rounded-fluent bg-fluent-surface-solid hover:bg-fluent-fill-hover text-fluent-success text-[10px] transition-colors disabled:opacity-50 border border-fluent-stroke-control"
             >
               {testing ? '测试中...' : '测试连接'}
             </button>
             <button
               onClick={handleTextTest}
               disabled={textTesting}
-              className="flex-1 py-1 rounded bg-amber-50 hover:bg-amber-100 text-amber-600 text-[10px] transition-colors disabled:opacity-50 border border-amber-200"
+              className="flex-1 py-1 rounded-fluent bg-fluent-surface-solid hover:bg-fluent-fill-hover text-fluent-warning text-[10px] transition-colors disabled:opacity-50 border border-fluent-stroke-control"
             >
               {textTesting ? '测试中...' : '文字 API 测试'}
             </button>
           </div>
           {testResult && (
-            <div className={`text-[10px] rounded-md px-2 py-1.5 ${
+            <div className={`text-[10px] rounded-fluent px-2 py-1.5 ${
               testResult.success
-                ? 'text-green-600 bg-green-50 border border-green-200'
-                : 'text-red-600 bg-red-50 border border-red-200'
+                ? 'text-fluent-success bg-green-50 border border-green-200'
+                : 'text-fluent-danger bg-red-50 border border-red-200'
             }`}>
               {testResult.message}
             </div>
           )}
           {textTestResult && (
-            <div className={`text-[10px] rounded-md px-2 py-1.5 ${
+            <div className={`text-[10px] rounded-fluent px-2 py-1.5 ${
               textTestResult.success
-                ? 'text-green-600 bg-green-50 border border-green-200'
-                : 'text-red-600 bg-red-50 border border-red-200'
+                ? 'text-fluent-success bg-green-50 border border-green-200'
+                : 'text-fluent-danger bg-red-50 border border-red-200'
             }`}>
               {textTestResult.message}
             </div>
@@ -210,9 +289,12 @@ export default function SettingsPanel({
         </div>
       </section>
 
+          </div>
+
+          <div className={activeCategory === 'efficiency' ? 'space-y-3' : 'hidden'}>
       {/* ===== 快捷键 ===== */}
-      <section className="bg-white rounded-md p-2.5 space-y-2">
-        <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">快捷键</h3>
+      <section className="card p-2.5 space-y-2">
+        <h3 className="text-[10px] font-semibold text-fluent-text-secondary uppercase tracking-wider">快捷键</h3>
         {editingShortcut ? (
           <div className="flex gap-1">
             <input
@@ -232,34 +314,34 @@ export default function SettingsPanel({
                 }
               }}
               placeholder="按下快捷键组合..."
-              className="flex-1 px-2 py-1 text-[10px] rounded bg-white border border-[#E5E5E5] text-gray-800 placeholder-gray-300 outline-none focus:border-[#0099FF]"
+              className="flex-1 px-2 py-1 text-[10px] rounded-fluent bg-fluent-surface-solid border border-fluent-stroke-control text-fluent-text-primary placeholder:text-fluent-text-tertiary outline-none focus:border-fluent-accent"
             />
-            <button onClick={handleSaveShortcut} className="px-2 py-1 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[10px]">保存</button>
+            <button onClick={handleSaveShortcut} className="btn-accent !px-2 !py-1 !text-[10px]">保存</button>
             <button
               onClick={() => { setEditingShortcut(false); setShortcutInput(aiSettings.shortcutKey || ''); }}
-              className="px-2 py-1 rounded bg-[#F5F5F5] text-gray-500 text-[10px]"
+              className="btn !px-2 !py-1 !text-[10px]"
             >
               取消
             </button>
           </div>
         ) : (
           <div className="flex items-center gap-1">
-            <code className="flex-1 px-2 py-1 text-[10px] rounded bg-[#F5F5F5] border border-[#E5E5E5] text-gray-600">
+            <code className="flex-1 px-2 py-1 text-[10px] rounded-fluent bg-fluent-fill-hover border border-fluent-stroke-control text-fluent-text-secondary">
               {aiSettings.shortcutKey || '未设置'}
             </code>
             <button
               onClick={() => setEditingShortcut(true)}
-              className="px-2 py-1 rounded bg-[#F5F5F5] hover:bg-[#EBEBEB] text-gray-500 text-[10px]"
+              className="btn !px-2 !py-1 !text-[10px]"
             >
               修改
             </button>
           </div>
         )}
-        <div className="text-[9px] text-gray-400">全局快捷键，无需点击按钮即可截图</div>
+        <div className="text-[9px] text-fluent-text-tertiary">全局快捷键，无需点击按钮即可截图</div>
 
         {/* 钉住状态快捷键 */}
-        <div className="pt-1 border-t border-[#E5E5E5]">
-          <div className="text-[9px] text-gray-400 mb-1">切换窗口钉住/释放</div>
+        <div className="pt-1 border-t border-fluent-stroke-divider">
+          <div className="text-[9px] text-fluent-text-tertiary mb-1">切换窗口钉住/释放</div>
           {editingPinShortcut ? (
             <div className="flex gap-1">
               <input
@@ -279,24 +361,24 @@ export default function SettingsPanel({
                   }
                 }}
                 placeholder="按下快捷键组合..."
-                className="flex-1 px-2 py-1 text-[10px] rounded bg-white border border-[#E5E5E5] text-gray-800 placeholder-gray-300 outline-none focus:border-[#0099FF]"
+                className="flex-1 px-2 py-1 text-[10px] rounded-fluent bg-fluent-surface-solid border border-fluent-stroke-control text-fluent-text-primary placeholder:text-fluent-text-tertiary outline-none focus:border-fluent-accent"
               />
-              <button onClick={handleSavePinShortcut} className="px-2 py-1 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[10px]">保存</button>
+              <button onClick={handleSavePinShortcut} className="btn-accent !px-2 !py-1 !text-[10px]">保存</button>
               <button
                 onClick={() => { setEditingPinShortcut(false); setPinShortcutInput(pinShortcutInput || ''); }}
-                className="px-2 py-1 rounded bg-[#F5F5F5] text-gray-500 text-[10px]"
+                className="btn !px-2 !py-1 !text-[10px]"
               >
                 取消
               </button>
             </div>
           ) : (
             <div className="flex items-center gap-1">
-              <code className="flex-1 px-2 py-1 text-[10px] rounded bg-[#F5F5F5] border border-[#E5E5E5] text-gray-600">
+              <code className="flex-1 px-2 py-1 text-[10px] rounded-fluent bg-fluent-fill-hover border border-fluent-stroke-control text-fluent-text-secondary">
                 {pinShortcutInput || '未设置'}
               </code>
               <button
                 onClick={() => setEditingPinShortcut(true)}
-                className="px-2 py-1 rounded bg-[#F5F5F5] hover:bg-[#EBEBEB] text-gray-500 text-[10px]"
+                className="btn !px-2 !py-1 !text-[10px]"
               >
                 修改
               </button>
@@ -306,8 +388,8 @@ export default function SettingsPanel({
       </section>
 
       {/* ===== 时间提醒层级 ===== */}
-      <section className="bg-white rounded-md p-2.5 space-y-2">
-        <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">时间提醒层级</h3>
+      <section className="card p-2.5 space-y-2">
+        <h3 className="text-[10px] font-semibold text-fluent-text-secondary uppercase tracking-wider">时间提醒层级</h3>
         <ReminderLevelSettings
           levels={reminderLevels}
           onChange={async (next) => {
@@ -317,16 +399,21 @@ export default function SettingsPanel({
         />
       </section>
 
+      <QuickLinkCategorySettings />
+
+          </div>
+
+          <div className={activeCategory === 'data' ? 'space-y-3' : 'hidden'}>
       {/* ===== 数据管理 ===== */}
-      <section className="bg-white rounded-md p-2.5 space-y-2">
-        <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">数据管理</h3>
+      <section className="card p-2.5 space-y-2">
+        <h3 className="text-[10px] font-semibold text-fluent-text-secondary uppercase tracking-wider">数据管理</h3>
 
         {dataStats && (
           <div className="space-y-1">
-            <div className="text-[10px] text-gray-500">
-              存储占用: <span className="font-medium text-gray-700">{dataStats.fileSizeFormatted}</span>
+            <div className="text-[10px] text-fluent-text-secondary">
+              存储占用: <span className="font-medium text-fluent-text-primary">{dataStats.fileSizeFormatted}</span>
             </div>
-            <div className="text-[9px] text-gray-400">
+            <div className="text-[9px] text-fluent-text-tertiary">
               {dataStats.counts.workspaces} 个工作区 · {dataStats.counts.todos} 条待办 · {dataStats.counts.links} 个链接
             </div>
           </div>
@@ -336,46 +423,61 @@ export default function SettingsPanel({
           <button
             onClick={handleExportData}
             disabled={exporting}
-            className="flex-1 py-1 rounded bg-[#F5F5F5] hover:bg-[#EBEBEB] text-gray-600 text-[10px] transition-colors disabled:opacity-50 border border-[#E5E5E5]"
+            className="btn flex-1 !py-1 !text-[10px]"
           >
             {exporting ? '导出中...' : '导出数据'}
           </button>
           <button
             onClick={handleImportData}
             disabled={importing}
-            className="flex-1 py-1 rounded bg-[#F5F5F5] hover:bg-[#EBEBEB] text-gray-600 text-[10px] transition-colors disabled:opacity-50 border border-[#E5E5E5]"
+            className="btn flex-1 !py-1 !text-[10px]"
           >
             {importing ? '导入中...' : '导入恢复'}
           </button>
         </div>
 
         {dataActionMsg && (
-          <div className={`text-[10px] rounded-md px-2 py-1.5 ${
+          <div className={`text-[10px] rounded-fluent px-2 py-1.5 ${
             dataActionMsg.type === 'success'
-              ? 'text-green-600 bg-green-50 border border-green-200'
-              : 'text-red-600 bg-red-50 border border-red-200'
+              ? 'text-fluent-success bg-green-50 border border-green-200'
+              : 'text-fluent-danger bg-red-50 border border-red-200'
           }`}>
             {dataActionMsg.text}
           </div>
         )}
 
-        <div className="text-[9px] text-gray-400 leading-relaxed">
+        <div className="text-[9px] text-fluent-text-tertiary leading-relaxed">
           Excel 用于查看历史，JSON 用于换电脑时完整恢复。
         </div>
       </section>
 
+          </div>
+
+          <div className={activeCategory === 'trash' ? 'space-y-3' : 'hidden'}>
+            <TrashPanel
+              trashedWorkspaces={trashedWorkspaces}
+              trashedTodos={trashedTodos}
+              restoreWorkspace={restoreWorkspace}
+              restoreTodo={restoreTodo}
+              permanentlyDeleteWorkspace={permanentlyDeleteWorkspace}
+              permanentlyDeleteTodo={permanentlyDeleteTodo}
+              clearTrash={clearTrash}
+            />
+          </div>
+
+          <div className={activeCategory === 'about' ? 'space-y-3' : 'hidden'}>
       {/* ===== 关于 / 更新检查 ===== */}
-      <section className="bg-white rounded-md p-2.5 space-y-2">
-        <h3 className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">关于</h3>
+      <section className="card p-2.5 space-y-2">
+        <h3 className="text-[10px] font-semibold text-fluent-text-secondary uppercase tracking-wider">关于</h3>
 
         <div className="flex items-center justify-between">
-          <div className="text-[10px] text-gray-500">
-            当前版本: <span className="font-medium text-gray-700">{CURRENT_APP_VERSION}</span>
+          <div className="text-[10px] text-fluent-text-secondary">
+            当前版本: <span className="font-medium text-fluent-text-primary">{CURRENT_APP_VERSION}</span>
           </div>
           <button
             onClick={handleCheckUpdate}
             disabled={updateStatus === 'checking' || updateStatus === 'downloading'}
-            className="px-2 py-1 rounded bg-[#F5F5F5] hover:bg-[#EBEBEB] text-gray-600 text-[10px] transition-colors disabled:opacity-50 border border-[#E5E5E5] flex items-center gap-1"
+            className="btn !px-2 !py-1 !text-[10px]"
           >
             {updateStatus === 'checking' ? (
               <>
@@ -392,7 +494,7 @@ export default function SettingsPanel({
         </div>
 
         {updateStatus === 'latest' && (
-          <div className="text-[10px] rounded-md px-2 py-1.5 text-green-600 bg-green-50 border border-green-200 flex items-center gap-1">
+          <div className="text-[10px] rounded-fluent px-2 py-1.5 text-fluent-success bg-green-50 border border-green-200 flex items-center gap-1">
             <CheckCircle size={10} />
             已是最新版本
           </div>
@@ -400,16 +502,16 @@ export default function SettingsPanel({
 
         {updateStatus === 'available' && updateInfo && (
           <div className="space-y-1.5">
-            <div className="text-[10px] rounded-md px-2 py-1.5 text-amber-600 bg-amber-50 border border-amber-200 flex items-center gap-1">
+            <div className="text-[10px] rounded-fluent px-2 py-1.5 text-fluent-warning bg-amber-50 border border-amber-200 flex items-center gap-1">
               <ArrowUpCircle size={10} />
               发现新版本 {updateInfo.latestVersion}
             </div>
             {updateInfo.releaseNotes && (
-              <div className="text-[9px] text-gray-400 leading-relaxed">{updateInfo.releaseNotes}</div>
+              <div className="text-[9px] text-fluent-text-tertiary leading-relaxed">{updateInfo.releaseNotes}</div>
             )}
             <button
               onClick={handleDownloadUpdate}
-              className="w-full py-1 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[10px] transition-colors flex items-center justify-center gap-1"
+              className="btn-accent w-full !py-1 !text-[10px]"
             >
               <Download size={10} />
               下载更新
@@ -419,14 +521,14 @@ export default function SettingsPanel({
 
         {updateStatus === 'downloading' && (
           <div className="space-y-1.5">
-            <div className="text-[10px] rounded-md px-2 py-1.5 text-blue-600 bg-blue-50 border border-blue-200 flex items-center gap-1">
+            <div className="text-[10px] rounded-fluent px-2 py-1.5 text-fluent-accent bg-fluent-accent-light border border-fluent-accent-border flex items-center gap-1">
               <RotateCw size={10} className="animate-spin" />
               正在下载更新{updateInfo?.progress !== undefined ? ` (${updateInfo.progress}%)` : ''}
             </div>
             {updateInfo?.progress !== undefined && (
-              <div className="h-1.5 w-full bg-gray-200 rounded-full overflow-hidden">
+              <div className="h-1.5 w-full bg-fluent-fill-hover rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-[#0099FF] rounded-full transition-all duration-300"
+                  className="h-full bg-fluent-accent rounded-full transition-all duration-300"
                   style={{ width: `${updateInfo.progress}%` }}
                 />
               </div>
@@ -436,13 +538,13 @@ export default function SettingsPanel({
 
         {updateStatus === 'downloaded' && (
           <div className="space-y-1.5">
-            <div className="text-[10px] rounded-md px-2 py-1.5 text-green-600 bg-green-50 border border-green-200 flex items-center gap-1">
+            <div className="text-[10px] rounded-fluent px-2 py-1.5 text-fluent-success bg-green-50 border border-green-200 flex items-center gap-1">
               <CheckCircle size={10} />
               下载完成，重启后安装
             </div>
             <button
               onClick={handleInstallUpdate}
-              className="w-full py-1 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[10px] transition-colors"
+              className="btn-accent w-full !py-1 !text-[10px]"
             >
               重启并安装
             </button>
@@ -450,12 +552,15 @@ export default function SettingsPanel({
         )}
 
         {updateStatus === 'error' && (
-          <div className="text-[10px] rounded-md px-2 py-1.5 text-red-600 bg-red-50 border border-red-200 flex items-center gap-1">
+          <div className="text-[10px] rounded-fluent px-2 py-1.5 text-fluent-danger bg-red-50 border border-red-200 flex items-center gap-1">
             <AlertCircle size={10} />
             检查更新失败{updateInfo?.error ? `：${updateInfo.error}` : ''}
           </div>
         )}
       </section>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

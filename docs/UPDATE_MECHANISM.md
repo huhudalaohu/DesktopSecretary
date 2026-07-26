@@ -215,6 +215,12 @@ node scripts/build/cleanup-cos.js
 - **修复**:过滤器加上 `.endsWith('.exe.blockmap')`,cosKey 推断同步加上 blockmap 判断
 - **教训**:发版前用第 5 节"验证清单"过一遍,curl 检查 COS 上每类文件都齐全
 
+### 坑 9: PAC 代理把更新源也代理了 → 客户端检测不到更新
+- **症状**:客户端点"检查更新"一直失败/转圈,但浏览器直接访问 latest.yml 正常;CloudBase 登录也同时失败
+- **根因**:`main/managers/window-manager.js` 的 PAC 规则只放行 `tcloudbase.com` 直连,其余全走本机代理(Clash)。但**身份认证 API 域名是 `*.tcb-api.tencentcloudapi.com`、更新源 COS 域名是 `*.cos.*.myqcloud.com`**——都不在直连白名单里,代理一关或规则不转发就全挂
+- **修复**:PAC 白名单必须同时包含 `tcloudbase.com` / `tencentcloudapi.com` / `myqcloud.com`
+- **教训**:**以后新增任何腾讯云/CloudBase 相关域名,先想一遍 PAC 白名单**;排查"网络相关灵异故障"先看请求实际走了哪条代理
+
 ---
 
 ## 7. Memory 提示给未来的 Claude

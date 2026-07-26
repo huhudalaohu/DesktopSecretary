@@ -32,6 +32,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # 构建时注入云函数 URL(均为公开 HTTP 触发器地址,本身就会打进客户端包,非机密)
+      - name: Write .env for build-time injection
+        shell: bash
+        run: |
+          cat > .env <<'EOF'
+          TCB_ENV_ID=ds-dev-d9g28xlrgd2600837
+          AI_PROXY_URL=https://ds-dev-d9g28xlrgd2600837-1420931574.ap-shanghai.app.tcloudbase.com/ai-proxy
+          GET_BALANCE_URL=https://ds-dev-d9g28xlrgd2600837-1420931574.ap-shanghai.app.tcloudbase.com/get-balance
+          APP_CONFIG_URL=https://ds-dev-d9g28xlrgd2600837-1420931574.ap-shanghai.app.tcloudbase.com/app-config
+          CREATE_RECHARGE_URL=https://ds-dev-d9g28xlrgd2600837-1420931574.ap-shanghai.app.tcloudbase.com/create-recharge
+          QUERY_ORDER_URL=https://ds-dev-d9g28xlrgd2600837-1420931574.ap-shanghai.app.tcloudbase.com/query-order
+          MOCK_PAY_URL=https://ds-dev-d9g28xlrgd2600837-1420931574.ap-shanghai.app.tcloudbase.com/mock-pay
+          DIRECT_RECHARGE_URL=https://ds-dev-d9g28xlrgd2600837-1420931574.ap-shanghai.app.tcloudbase.com/direct-recharge
+          EOF
+
       - name: Build frontend
         run: npm run build
 

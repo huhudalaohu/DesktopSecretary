@@ -1,7 +1,7 @@
 {
   "name": "desktop-secretary",
-  "version": "1.0.13",
-  "description": "A glassmorphism desktop assistant pinned to the right side of your screen",
+  "version": "1.0.14",
+  "description": "A Windows 11 Fluent design desktop assistant pinned to the right side of your screen",
   "main": "main.js",
   "scripts": {
     "start": "electron .",

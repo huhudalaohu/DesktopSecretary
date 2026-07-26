@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Clock } from 'lucide-react';
 import { DEFAULT_REMINDER_LEVELS } from './ReminderLevelSettings';
 
 const api = window.desktopAPI;
@@ -32,6 +31,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // 最小展示范围：至少两周（方便单点时也能看到周日标记）
 const MIN_DISPLAY_DAYS = 14;
 const MIN_DISPLAY_MS = MIN_DISPLAY_DAYS * DAY_MS;
+// 周一标签之间的最小水平间距（百分比），低于此间隔的标签隐藏，避免重叠
+const MIN_LABEL_GAP_PERCENT = 12;
 
 function formatShortDate(ts) {
   if (!ts) return '';
@@ -185,6 +186,16 @@ export default function Timeline({ activeWorkspace, reminderLevels, onFocusTodo 
       weekStart = weekEnd;
       idx++;
     }
+    // 标签防重叠：水平间距不足 MIN_LABEL_GAP_PERCENT 的标签隐藏（保留靠左的第一个）
+    let lastLabelLeft = -Infinity;
+    for (const seg of segs) {
+      if (!seg.showMondayLabel) continue;
+      if (seg.mondayLeft - lastLabelLeft < MIN_LABEL_GAP_PERCENT) {
+        seg.showMondayLabel = false;
+      } else {
+        lastLabelLeft = seg.mondayLeft;
+      }
+    }
     return segs;
   }, [visibleTodos, viewportStart, viewportEnd, viewportRange]);
 
@@ -192,18 +203,19 @@ export default function Timeline({ activeWorkspace, reminderLevels, onFocusTodo 
 
   return (
     <div className="px-4 mt-[3px] mb-2 select-none">
-      {/* 头部标签 */}
-      <div className="flex items-center justify-between mb-1">
+      {/* 头部：标题（与其他分区一致）+ 视图控制 */}
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[15px] font-semibold text-fluent-text-primary">时间轴</span>
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1">
-            <Clock size={10} className="text-blue-400" />
-            <span className="text-[10px] font-normal text-[#999]">时间轴</span>
-          </div>
+          {needsScroll && (
+            <span className="text-[10px] font-normal text-fluent-text-tertiary">滚轮查看更多</span>
+          )}
+          <span className="text-[10px] font-normal text-fluent-text-tertiary">{isEmpty ? 0 : visibleTodos.length} 个待办</span>
           {/* 月视图 / 全部 切换开关 */}
           <button
             onClick={() => setShowAll((prev) => !prev)}
             className={`relative w-[18px] h-[10px] rounded-full transition-colors ${
-              showAll ? 'bg-blue-400' : 'bg-gray-300'
+              showAll ? 'bg-fluent-accent' : 'bg-gray-300'
             }`}
             title={showAll ? '切换为月视图' : '切换为全部视图'}
           >
@@ -213,109 +225,107 @@ export default function Timeline({ activeWorkspace, reminderLevels, onFocusTodo 
               }`}
             />
           </button>
-          <span className="text-[10px] font-normal text-[#999]">{showAll ? '全部' : '月'}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          {needsScroll && (
-            <span className="text-[10px] font-normal text-[#999]">滚轮查看更多</span>
-          )}
-          <span className="text-[10px] font-normal text-[#999]">{isEmpty ? 0 : visibleTodos.length} 个待办</span>
+          <span className="text-[10px] font-normal text-fluent-text-tertiary">{showAll ? '全部' : '月'}</span>
         </div>
       </div>
 
-      {/* 时间轴主体 */}
-      <div
-        className="relative h-6 flex items-center"
-        onWheel={handleWheel}
-      >
-        {isEmpty ? (
-          <>
-            {/* 空状态占位轴线 */}
-            <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-[2px] rounded-full bg-gray-200" />
-          </>
-        ) : (
-          <>
-            {/* 分段周轴线 — 每周从浅蓝渐变至深蓝 */}
-            <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-[2px] rounded-full overflow-hidden">
-              {weekSegments.map((seg, i) => (
-                <div
-                  key={i}
-                  className="absolute top-0 h-full"
-                  style={{
-                    left: `${seg.left}%`,
-                    width: `${seg.width}%`,
-                    background: `linear-gradient(to right, ${seg.theme.light}, ${seg.theme.deep})`,
-                  }}
-                />
-              ))}
-            </div>
+      {/* 时间轴主体（卡片） */}
+      <div className="card p-2.5">
+        <div
+          className="relative h-6 flex items-center"
+          onWheel={handleWheel}
+        >
+          {isEmpty ? (
+            <>
+              {/* 空状态占位轴线 */}
+              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-[2px] rounded-full bg-gray-200" />
+            </>
+          ) : (
+            <>
+              {/* 分段周轴线 — 每周从浅蓝渐变至深蓝 */}
+              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-[2px] rounded-full overflow-hidden">
+                {weekSegments.map((seg, i) => (
+                  <div
+                    key={i}
+                    className="absolute top-0 h-full"
+                    style={{
+                      left: `${seg.left}%`,
+                      width: `${seg.width}%`,
+                      background: `linear-gradient(to right, ${seg.theme.light}, ${seg.theme.deep})`,
+                    }}
+                  />
+                ))}
+              </div>
 
-            {/* 周一日期标签 — 放在每段左边界 */}
-            <div className="absolute top-[65%] left-0 right-0 h-3 pointer-events-none">
-              {weekSegments.filter((s) => s.showMondayLabel).map((seg, i) => {
-                const nearLeft = (seg.mondayLeft ?? 0) < 4;
+              {/* 时间打点 */}
+              {positioned.map(({ todo, left, staggerY, time }) => {
+                const isReminder = !!todo.reminderTime;
+                const isNearLeft = left < 12;
+                const isNearRight = left > 88;
+                const tooltipAlign = isNearLeft ? 'left-0 translate-x-0' : isNearRight ? 'right-0 translate-x-0' : 'left-1/2 -translate-x-1/2';
+                const arrowAlign = isNearLeft ? 'left-1 translate-x-0' : isNearRight ? 'right-1 translate-x-0' : 'left-1/2 -translate-x-1/2';
                 return (
                   <div
-                    key={`mon-${i}`}
-                    className={`absolute text-[10px] font-normal text-[#999] tabular-nums whitespace-nowrap ${
-                      nearLeft ? 'left-0' : ''
-                    }`}
-                    style={nearLeft ? {} : { left: `${seg.mondayLeft}%`, transform: 'translateX(-50%)' }}
+                    key={todo.id}
+                    className="absolute flex flex-col items-center group cursor-pointer"
+                    style={{ left: `${left}%`, top: '50%', transform: `translate(-50%, calc(-50% + ${staggerY}px))` }}
+                    onDoubleClick={() => onFocusTodo?.(todo.id)}
                   >
-                    {seg.mondayLabel}
+                    {/* 点 — 颜色与 TodoList 提醒按钮文字色一致 */}
+                    <div
+                      className="w-[7px] h-[7px] rounded-full border border-white shadow-sm transition-transform duration-150 group-hover:scale-150"
+                      style={(() => {
+                        const c = getReminderColor(todo.reminderTime, reminderLevels);
+                        return { backgroundColor: c.text };
+                      })()}
+                    />
+                    {/* Tooltip */}
+                    <div className={`absolute bottom-full mb-1.5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 ${tooltipAlign}`}>
+                      <div className="bg-fluent-surface-flyout border border-fluent-stroke-card text-fluent-text-primary text-[10px] font-normal px-2 py-1 rounded-fluent whitespace-nowrap shadow-fluent-flyout">
+                        <div className="font-medium">{todo.text}</div>
+                        <div className="text-fluent-text-secondary mt-0.5">
+                          {isReminder ? `提醒 ${formatShortDate(time)} ${formatTime(time)}` : `创建 ${formatShortDate(time)}`}
+                        </div>
+                      </div>
+                      {/* 小三角 */}
+                      <div className={`absolute -bottom-1 w-0 h-0 border-l-[4px] border-r-[4px] border-t-[4px] border-l-transparent border-r-transparent border-t-fluent-surface-flyout ${arrowAlign}`} />
+                    </div>
                   </div>
                 );
               })}
-            </div>
+            </>
+          )}
+        </div>
 
-            {/* 时间打点 */}
-            {positioned.map(({ todo, left, staggerY, time }) => {
-              const isReminder = !!todo.reminderTime;
-              const isNearLeft = left < 12;
-              const isNearRight = left > 88;
-              const tooltipAlign = isNearLeft ? 'left-0 translate-x-0' : isNearRight ? 'right-0 translate-x-0' : 'left-1/2 -translate-x-1/2';
-              const arrowAlign = isNearLeft ? 'left-1 translate-x-0' : isNearRight ? 'right-1 translate-x-0' : 'left-1/2 -translate-x-1/2';
+        {/* 周一日期标签 — 独立一行，避免与打点、起止标签重叠 */}
+        {!isEmpty && (
+          <div className="relative h-[14px] mt-0.5 pointer-events-none">
+            {weekSegments.filter((s) => s.showMondayLabel).map((seg, i) => {
+              const nearLeft = (seg.mondayLeft ?? 0) < 4;
               return (
                 <div
-                  key={todo.id}
-                  className="absolute flex flex-col items-center group cursor-pointer"
-                  style={{ left: `${left}%`, top: '50%', transform: `translate(-50%, calc(-50% + ${staggerY}px))` }}
-                  onDoubleClick={() => onFocusTodo?.(todo.id)}
+                  key={`mon-${i}`}
+                  className={`absolute top-0 text-[10px] font-normal text-fluent-text-tertiary tabular-nums whitespace-nowrap ${
+                    nearLeft ? 'left-0' : ''
+                  }`}
+                  style={nearLeft ? {} : { left: `${seg.mondayLeft}%`, transform: 'translateX(-50%)' }}
                 >
-                  {/* 点 — 颜色与 TodoList 提醒按钮文字色一致 */}
-                  <div
-                    className="w-[7px] h-[7px] rounded-full border border-white shadow-sm transition-transform duration-150 group-hover:scale-150"
-                    style={(() => {
-                      const c = getReminderColor(todo.reminderTime, reminderLevels);
-                      return { backgroundColor: c.text };
-                    })()}
-                  />
-                  {/* Tooltip */}
-                  <div className={`absolute bottom-full mb-1.5 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 ${tooltipAlign}`}>
-                    <div className="bg-gray-800 text-white text-[10px] font-normal px-2 py-1 rounded-md whitespace-nowrap shadow-lg">
-                      <div className="font-medium">{todo.text}</div>
-                      <div className="text-gray-300 mt-0.5">
-                        {isReminder ? `提醒 ${formatShortDate(time)} ${formatTime(time)}` : `创建 ${formatShortDate(time)}`}
-                      </div>
-                    </div>
-                    {/* 小三角 */}
-                    <div className={`absolute -bottom-1 w-0 h-0 border-l-[4px] border-r-[4px] border-t-[4px] border-l-transparent border-r-transparent border-t-gray-800 ${arrowAlign}`} />
-                  </div>
+                  {seg.mondayLabel}
                 </div>
               );
             })}
-          </>
+          </div>
         )}
-      </div>
 
-      {/* 底部时间标签 — 显示视口起止 */}
-      <div className="flex justify-between mt-0.5">
-        <span className="text-[10px] font-normal text-[#999] tabular-nums">
-          {isEmpty ? '--' : (hasReminder ? formatShortDate(viewportStart) + ' ' + formatTime(viewportStart) : formatShortDate(viewportStart))}
-        </span>
-        <span className="text-[10px] font-normal text-[#999] tabular-nums">
-          {isEmpty ? '--' : (hasReminder ? formatShortDate(viewportEnd) + ' ' + formatTime(viewportEnd) : formatShortDate(viewportEnd))}
-        </span>
+        {/* 底部时间标签 — 显示视口起止 */}
+        <div className="flex justify-between mt-0.5">
+          <span className="text-[10px] font-normal text-fluent-text-tertiary tabular-nums">
+            {isEmpty ? '--' : (hasReminder ? formatShortDate(viewportStart) + ' ' + formatTime(viewportStart) : formatShortDate(viewportStart))}
+          </span>
+          <span className="text-[10px] font-normal text-fluent-text-tertiary tabular-nums">
+            {isEmpty ? '--' : (hasReminder ? formatShortDate(viewportEnd) + ' ' + formatTime(viewportEnd) : formatShortDate(viewportEnd))}
+          </span>
+        </div>
       </div>
     </div>
   );

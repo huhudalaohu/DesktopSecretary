@@ -31,40 +31,40 @@ function ColorPicker({ value, onChange, label }) {
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-[#D4D4D4] bg-white hover:border-[#999] transition-colors"
+        className="flex items-center gap-1 px-1.5 py-0.5 rounded-fluent border border-fluent-stroke-control bg-fluent-surface-solid hover:border-fluent-text-tertiary transition-colors"
         title={label}
       >
         <span
-          className="w-3 h-3 rounded-sm border border-[#E5E5E5]"
+          className="w-3 h-3 rounded-sm border border-fluent-stroke-control"
           style={{ backgroundColor: value }}
         />
-        <ChevronDown size={10} className="text-gray-400" />
+        <ChevronDown size={10} className="text-fluent-text-tertiary" />
       </button>
 
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute z-50 mt-1 p-1.5 bg-white border border-[#D4D4D4] rounded shadow-lg grid gap-0.5">
+          <div className="absolute z-50 mt-1 p-1.5 bg-fluent-surface-flyout border border-fluent-stroke-card rounded-fluent-lg shadow-fluent-flyout grid gap-0.5">
             {EXCEL_PALETTE.map((row, ri) => (
               <div key={ri} className="flex gap-0.5">
                 {row.map((color) => (
                   <button
                     key={color}
                     onClick={() => { onChange(color); setOpen(false); }}
-                    className="w-4 h-4 rounded-sm border border-[#E5E5E5] hover:scale-110 transition-transform"
+                    className="w-4 h-4 rounded-sm border border-fluent-stroke-control hover:scale-110 transition-transform"
                     style={{ backgroundColor: color }}
                     title={color}
                   />
                 ))}
               </div>
             ))}
-            <div className="border-t border-[#E5E5E5] pt-1 mt-0.5">
+            <div className="border-t border-fluent-stroke-divider pt-1 mt-0.5">
               <input
                 type="text"
                 value={value}
                 onChange={(e) => onChange(e.target.value)}
                 placeholder="#RRGGBB"
-                className="w-full px-1 py-0.5 text-[9px] rounded border border-[#E5E5E5] outline-none focus:border-[#0099FF]"
+                className="w-full px-1 py-0.5 text-[9px] rounded-fluent bg-fluent-surface-solid border border-fluent-stroke-control text-fluent-text-primary placeholder:text-fluent-text-tertiary outline-none focus:border-fluent-accent"
               />
             </div>
           </div>
@@ -111,7 +111,7 @@ function DurationInput({ value, onChange }) {
           setNum(e.target.value);
           commit(e.target.value, unit);
         }}
-        className="w-10 px-1 py-0.5 text-[10px] rounded border border-[#E5E5E5] outline-none focus:border-[#0099FF]"
+        className="w-10 px-1 py-0.5 text-[10px] rounded-fluent bg-fluent-surface-solid border border-fluent-stroke-control text-fluent-text-primary outline-none focus:border-fluent-accent"
       />
       <select
         value={unit}
@@ -120,7 +120,7 @@ function DurationInput({ value, onChange }) {
           setUnit(u);
           commit(num, u);
         }}
-        className="w-[52px] px-0.5 py-0.5 text-[10px] rounded border border-[#E5E5E5] outline-none focus:border-[#0099FF] bg-white"
+        className="w-[52px] px-0.5 py-0.5 text-[10px] rounded-fluent border border-fluent-stroke-control outline-none focus:border-fluent-accent bg-fluent-surface-solid text-fluent-text-primary"
       >
         <option value="分钟">分钟</option>
         <option value="小时">小时</option>
@@ -165,7 +165,7 @@ export default function ReminderLevelSettings({ levels, onChange }) {
 
   return (
     <div className="space-y-2">
-      <div className="text-[9px] text-gray-400 leading-relaxed">
+      <div className="text-[9px] text-fluent-text-tertiary leading-relaxed">
         按时间由近到远排列，第一个层级固定为"已过期"。
       </div>
 
@@ -173,22 +173,22 @@ export default function ReminderLevelSettings({ levels, onChange }) {
         {levels.map((level, index) => (
           <div
             key={level.id}
-            className="flex items-center gap-1.5 px-1.5 py-1 rounded bg-white border border-[#E5E5E5]"
+            className="flex items-center gap-1.5 px-1.5 py-1 rounded-fluent bg-fluent-surface-solid border border-fluent-stroke-card"
           >
             {/* 层级序号 */}
-            <span className="text-[9px] text-gray-400 w-3 text-center tabular-nums">{index + 1}</span>
+            <span className="text-[9px] text-fluent-text-tertiary w-3 text-center tabular-nums">{index + 1}</span>
 
             {/* 标签名 */}
             <input
               value={level.label}
               onChange={(e) => updateLevel(level.id, { label: e.target.value })}
               disabled={level.minutes === 0}
-              className="w-14 px-1 py-0.5 text-[10px] rounded border border-[#E5E5E5] outline-none focus:border-[#0099FF] disabled:bg-[#F5F5F5] disabled:text-gray-400"
+              className="w-14 px-1 py-0.5 text-[10px] rounded-fluent bg-fluent-surface-solid border border-fluent-stroke-control text-fluent-text-primary outline-none focus:border-fluent-accent disabled:bg-fluent-fill-hover disabled:text-fluent-text-tertiary"
             />
 
             {/* 时间阈值 */}
             {level.minutes === 0 ? (
-              <span className="text-[10px] text-gray-400 w-[88px]">已过期</span>
+              <span className="text-[10px] text-fluent-text-tertiary w-[88px]">已过期</span>
             ) : (
               <DurationInput
                 value={level.minutes}
@@ -225,7 +225,7 @@ export default function ReminderLevelSettings({ levels, onChange }) {
             <button
               onClick={() => removeLevel(level.id)}
               disabled={level.minutes === 0 || levels.length <= 2}
-              className="p-0.5 rounded text-gray-300 hover:text-red-500 hover:bg-red-50 disabled:opacity-30 transition-colors"
+              className="p-0.5 rounded-fluent text-fluent-text-tertiary hover:text-fluent-danger hover:bg-red-50 disabled:opacity-30 transition-colors"
             >
               <Trash2 size={10} />
             </button>
@@ -235,7 +235,7 @@ export default function ReminderLevelSettings({ levels, onChange }) {
 
       <button
         onClick={addLevel}
-        className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-[#0099FF] hover:bg-blue-50 border border-dashed border-[#0099FF] transition-colors"
+        className="flex items-center gap-1 px-2 py-1 rounded-fluent text-[10px] text-fluent-accent hover:bg-fluent-accent-light border border-dashed border-fluent-accent transition-colors"
       >
         <Plus size={10} />
         添加层级

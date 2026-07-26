@@ -110,16 +110,16 @@ export default function RechargeModal({ onClose }) {
         if (e.target === e.currentTarget) onClose?.();
       }}
     >
-      <div className="w-[300px] bg-white rounded-xl shadow-2xl border border-[#E5E5E5] overflow-hidden">
+      <div className="w-[300px] bg-fluent-surface-flyout rounded-fluent-lg shadow-fluent-flyout border border-fluent-stroke-card overflow-hidden">
         {/* 标题 */}
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#F0F0F0]">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-fluent-stroke-divider">
           <div className="flex items-center gap-1.5">
             <Coins size={14} className="text-amber-500" />
-            <span className="text-[12px] font-semibold text-gray-800">积分充值</span>
+            <span className="text-[12px] font-semibold text-fluent-text-primary">积分充值</span>
           </div>
           <button
             onClick={onClose}
-            className="p-0.5 rounded hover:bg-[#EBEBEB] text-gray-400 hover:text-gray-600 transition-colors"
+            className="icon-btn"
             title="关闭 (Esc)"
           >
             <X size={12} />
@@ -129,7 +129,7 @@ export default function RechargeModal({ onClose }) {
         {/* 内容 */}
         <div className="px-4 py-3 space-y-3">
           {error && (
-            <div className="flex items-start gap-1.5 text-[10px] rounded-md px-2 py-1.5 text-red-600 bg-red-50 border border-red-200">
+            <div className="flex items-start gap-1.5 text-[10px] rounded-fluent px-2 py-1.5 text-fluent-danger bg-red-50 border border-red-200">
               <AlertCircle size={11} className="flex-shrink-0 mt-[1px]" />
               <span>{error}</span>
             </div>
@@ -138,9 +138,9 @@ export default function RechargeModal({ onClose }) {
           {stage === 'input' && (
             <>
               <div>
-                <div className="text-[10px] text-gray-500 mb-1">充值金额(¥{MIN_YUAN}~¥{MAX_YUAN})</div>
+                <div className="text-[10px] text-fluent-text-secondary mb-1">充值金额(¥{MIN_YUAN}~¥{MAX_YUAN})</div>
                 <div className="flex items-center gap-1">
-                  <span className="text-[16px] text-gray-400">¥</span>
+                  <span className="text-[16px] text-fluent-text-tertiary">¥</span>
                   <input
                     ref={inputRef}
                     type="number"
@@ -150,14 +150,14 @@ export default function RechargeModal({ onClose }) {
                     value={yuanInput}
                     onChange={(e) => setYuanInput(e.target.value.replace(/[^\d]/g, ''))}
                     onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
-                    className="flex-1 px-2 py-1.5 text-[16px] font-semibold border border-[#E5E5E5] rounded focus:outline-none focus:border-[#0099FF]"
+                    className="input flex-1 py-1.5 text-[16px] font-semibold"
                     placeholder={String(DEFAULT_YUAN)}
                   />
                 </div>
-                <div className="mt-1 text-[10px] text-gray-400">
+                <div className="mt-1 text-[10px] text-fluent-text-tertiary">
                   {isAmountValid
                     ? <>将获得 <span className="text-amber-600 font-medium">{previewCredits}</span> 积分(¥1 = {CREDITS_PER_YUAN_HINT} 积分)</>
-                    : <span className="text-red-500">金额需在 ¥{MIN_YUAN}~¥{MAX_YUAN} 之间</span>
+                    : <span className="text-fluent-danger">金额需在 ¥{MIN_YUAN}~¥{MAX_YUAN} 之间</span>
                   }
                 </div>
               </div>
@@ -165,7 +165,7 @@ export default function RechargeModal({ onClose }) {
               <button
                 onClick={handleSubmit}
                 disabled={!isAmountValid}
-                className="w-full py-2 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[12px] font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-1"
+                className="btn-accent w-full py-2 text-[12px] font-medium"
               >
                 确认充值
               </button>
@@ -174,23 +174,23 @@ export default function RechargeModal({ onClose }) {
 
           {stage === 'submitting' && (
             <div className="py-6 text-center space-y-2">
-              <Loader2 size={28} className="mx-auto text-[#0099FF] animate-spin" />
-              <div className="text-[11px] text-gray-500">充值处理中...</div>
+              <Loader2 size={28} className="mx-auto text-fluent-accent animate-spin" />
+              <div className="text-[11px] text-fluent-text-secondary">充值处理中...</div>
             </div>
           )}
 
           {stage === 'success' && (
             <div className="py-3 text-center space-y-2">
-              <CheckCircle2 size={36} className="mx-auto text-green-500" />
-              <div className="text-[13px] font-medium text-gray-800">充值成功</div>
+              <CheckCircle2 size={36} className="mx-auto text-fluent-success" />
+              <div className="text-[13px] font-medium text-fluent-text-primary">充值成功</div>
               {credits != null && (
                 <div className="text-[11px] text-amber-600">
                   +{credits} 积分
                 </div>
               )}
               {newBalance != null && (
-                <div className="text-[10px] text-gray-500">
-                  当前余额:<span className="text-gray-800 font-semibold">{newBalance}</span>
+                <div className="text-[10px] text-fluent-text-secondary">
+                  当前余额:<span className="text-fluent-text-primary font-semibold">{newBalance}</span>
                 </div>
               )}
             </div>
@@ -199,13 +199,13 @@ export default function RechargeModal({ onClose }) {
           {stage === 'failed' && (
             <>
               <div className="py-3 text-center space-y-1.5">
-                <AlertCircle size={28} className="mx-auto text-red-400" />
-                <div className="text-[12px] font-medium text-gray-700">充值失败</div>
-                {error && <div className="text-[10px] text-gray-500">{error}</div>}
+                <AlertCircle size={28} className="mx-auto text-fluent-danger" />
+                <div className="text-[12px] font-medium text-fluent-text-primary">充值失败</div>
+                {error && <div className="text-[10px] text-fluent-text-secondary">{error}</div>}
               </div>
               <button
                 onClick={handleRestart}
-                className="w-full py-2 rounded bg-[#0099FF] hover:bg-[#007ACC] text-white text-[12px] font-medium transition-colors"
+                className="btn-accent w-full py-2 text-[12px] font-medium"
               >
                 重新发起
               </button>
