@@ -9,6 +9,7 @@ import {
 import { callAI, CallAIError } from '../services/ai-proxy';
 import { parseDeadlineToTimestamp } from '../utils/datetime';
 import { hashDataUrl } from '../utils/format';
+import { compressImageDataUrl } from '../utils/image';
 
 export const SCREENSHOT_STATUS = {
   IDLE: 'idle',
@@ -81,11 +82,13 @@ export function useScreenshotAI(api, aiSettings) {
     try {
       // 截图理解需要多模态,默认走 precise(若用户选了 fast 也允许)
       const mode = aiSettings?.mode === 'fast' ? 'fast' : 'precise';
+      // 压缩后再发送:整屏 PNG base64 会打爆 CloudBase 触发器的请求体上限
+      const compressedImage = await compressImageDataUrl(croppedDataUrl);
       const messages = [{
         role: 'user',
         content: [
           { type: 'text', text: SCREENSHOT_PROMPT },
-          { type: 'image_url', image_url: { url: croppedDataUrl } },
+          { type: 'image_url', image_url: { url: compressedImage } },
         ],
       }];
 

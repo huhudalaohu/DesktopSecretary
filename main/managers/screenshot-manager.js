@@ -117,16 +117,15 @@ class ScreenshotManager {
           this._resolve(null);
         }, SCREENSHOT_TIMEOUT_MS);
 
-        // 1. 隐藏主窗口
+        // 1. 隐藏主窗口（等 hide 事件 + DWM 合成器 settle，否则截图带残影）
         const mainWindow = this.getMainWindow();
-        if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
           const dock = this.getDockManager();
           if (dock) {
             if (dock.dockExpandTimer) { clearTimeout(dock.dockExpandTimer); dock.dockExpandTimer = null; }
             if (dock.dockHideTimer) { clearTimeout(dock.dockHideTimer); dock.dockHideTimer = null; }
           }
-          mainWindow.hide();
-          await new Promise(r => setTimeout(r, 100));
+          await this._hideMainWindowAndSettle(mainWindow);
         }
 
         // 2. 确保 overlay 就绪
@@ -185,13 +184,14 @@ class ScreenshotManager {
           }
 
           const tBuf0 = Date.now();
-          const buffer = source.toBuffer('png');
+          // overlay 显示用 JPEG：编码快、IPC 传输量小（裁剪仍用原始 PNG 数据，不影响画质）
+          const buffer = source.toBuffer('jpeg');
           const tBuf1 = Date.now();
-          console.log(`[Screenshot] display[${displayId}] PNG ${tBuf1 - tBuf0}ms, ${Math.round(buffer.length / 1024)}KB, engine=${source.engine}`);
+          console.log(`[Screenshot] display[${displayId}] JPEG ${tBuf1 - tBuf0}ms, ${Math.round(buffer.length / 1024)}KB, engine=${source.engine}`);
 
           win.webContents.send('screenshot:start', {
             buffer,
-            mime: 'image/png',
+            mime: 'image/jpeg',
             windowRect: null,
             virtualBounds: {
               x: display.bounds.x,
@@ -298,6 +298,21 @@ class ScreenshotManager {
     this._resolve(dataUrl);
 
     return { success: true, dataUrl };
+  }
+
+  /**
+   * 隐藏主窗口并等待 DWM 合成器把窗口内容从屏幕上移除。
+   * hide() 只是发消息，立即截屏会抓到未刷新的帧（残影）。
+   */
+  async _hideMainWindowAndSettle(win) {
+    await new Promise((resolve) => {
+      if (win.isDestroyed() || !win.isVisible()) { resolve(); return; }
+      const timer = setTimeout(resolve, 500);
+      win.once('hide', () => { clearTimeout(timer); resolve(); });
+      win.hide();
+    });
+    const settleMs = process.platform === 'win32' ? 300 : 150;
+    await new Promise(r => setTimeout(r, settleMs));
   }
 
   hideOverlay() {
