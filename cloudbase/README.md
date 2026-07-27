@@ -57,6 +57,25 @@ JWT_SECRET=<随机生成的 32 字节字符串>   # 必填,生产环境务必用
 
 > **生成 JWT_SECRET**:`node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`
 
+#### 1.1.1 MySQL 函数的额外要求(DB_* 环境变量 + VPC 配置)
+
+凡是 `require('./lib/mysql')` 的函数(ai-proxy / create-recharge / direct-recharge / mock-pay / query-order / recharge-callback)必须:
+
+1. 配置环境变量:`DB_HOST`(MySQL 内网地址)/ `DB_PORT` / `DB_USER` / `DB_PASSWORD` / `DB_NAME`
+2. **挂载到 MySQL 所在的 VPC**——否则函数根本连不通内网地址,所有调用报 `connect ETIMEDOUT`
+   (ai-proxy 表现为「初始化用户积分失败」)。**函数默认不带 VPC,这一步极易漏:**
+
+```bash
+# 内网地址/VPC/子网 ID 查询:
+tcb db instance list -e <envId>      # 看 Vip / VpcId / SubnetId
+
+# 给函数挂 VPC(一次配置,长期有效):
+tcb config update fn ai-proxy --vpc vpc-qm25fih0/subnet-p1s5fs5t --env-id <envId>
+```
+
+> 踩坑记录:2026-07 发现 ai-proxy 从未挂 VPC,上线后所有 AI 调用全部 ETIMEDOUT。
+> **新建/重建 MySQL 实例后 Vip 可能变化,要同步更新所有函数的 DB_HOST。**
+
 #### 1.2 把 `_shared` 复制到每个函数目录
 
 ```bash

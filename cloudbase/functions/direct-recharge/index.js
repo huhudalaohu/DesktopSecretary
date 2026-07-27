@@ -1,14 +1,18 @@
 /**
- * 云函数: direct-recharge (doc DB 版)
+ * 云函数: direct-recharge (MySQL 版)
  *
  * 一步直达充值:输入金额 → 立即加积分 → 写流水 → 返回新余额。
- * 使用 doc DB 操作 user_credits / credit_transactions / recharge_orders,
- * 避免 MySQL VPC 网络不通问题。
+ * 与 ai-proxy / get-balance 共用 MySQL 的 user_credits / credit_transactions。
+ * (历史:曾因函数未挂 VPC 写成 doc DB 版,导致充值进了 doc DB、积分中心看不到。
+ *  VPC 修复后统一回 MySQL。)
  *
  * 鉴权: 自验 JWT (从 Authorization header 提取)。
  *
  * 入参: { amount: number }  // 单位:分,如 1000 = ¥10
  * 返回: { balanceAfter, credits }
+ *
+ * 环境变量: DB_HOST / DB_PORT / DB_USER / DB_PASSWORD / DB_NAME
+ * 网络: 必须挂载 MySQL 所在 VPC(见 cloudbase/README.md 1.1.1)
  */
 
 const cloudbase = require('@cloudbase/node-sdk');
@@ -16,6 +20,8 @@ const cloudbase = require('@cloudbase/node-sdk');
 const { ok, fail, handleOptions, parseBody } = require('./lib/response');
 const { requireAuth, authErrorResponse } = require('./lib/auth-helper');
 const { getAppConfig } = require('./lib/config-cache');
+const { ensureUserCredits } = require('./lib/credits-init');
+const { tx } = require('./lib/mysql');
 
 exports.main = async (event, context) => {
   const corsResp = handleOptions(event);
@@ -42,7 +48,6 @@ exports.main = async (event, context) => {
   try {
     const app = cloudbase.init({ env: cloudbase.SYMBOL_CURRENT_ENV });
     const db = app.database();
-    const _ = db.command;
     const config = await getAppConfig(db);
     const rechargeCfg = config.recharge || {};
     const paymentCfg = config.payment || { provider: 'mock', enabled: true };
@@ -68,72 +73,43 @@ exports.main = async (event, context) => {
       return fail(400, '充值积分计算异常', { code: 'CREDITS_ZERO' });
     }
 
-    const now = new Date();
+    // 1. 懒初始化(独立事务,内部有行锁;不存在则建行并发 welcome)
+    await ensureUserCredits(uid, config);
 
-    // 1. 确保 user_credits 文档存在(懒初始化),同时原子加积分
-    const creditsDoc = await db.collection('user_credits').doc(uid).get();
-    const exists = creditsDoc.data && (Array.isArray(creditsDoc.data) ? creditsDoc.data.length > 0 : !!creditsDoc.data);
+    // 2. 单事务:加积分 + 写流水 + 写审计订单
+    const balanceAfter = await tx(async (conn) => {
+      const now = new Date();
 
-    if (!exists) {
-      const welcomeBonus = Number(config.welcomeBonus) || 500;
-      await db.collection('user_credits').add({
-        _id: uid,
-        balance: welcomeBonus + credits,
-        totalRecharged: welcomeBonus + credits,
-        totalConsumed: 0,
-        welcomedAt: now,
-        updatedAt: now,
-      });
-      // 写欢迎流水
-      await db.collection('credit_transactions').add({
-        uid,
-        type: 'recharge_gift',
-        amount: welcomeBonus,
-        balanceAfter: welcomeBonus + credits,
-        meta: { reason: 'welcome' },
-        createdAt: now,
-      });
-    } else {
-      // 原子加积分
-      await db.collection('user_credits').doc(uid).update({
-        balance: _.inc(credits),
-        totalRecharged: _.inc(credits),
-        updatedAt: now,
-      });
-    }
+      await conn.execute(
+        `UPDATE user_credits
+            SET balance         = balance + ?,
+                total_recharged = total_recharged + ?,
+                updated_at      = ?
+          WHERE uid = ?`,
+        [credits, credits, now, uid]
+      );
+      const [rows] = await conn.execute(
+        'SELECT balance FROM user_credits WHERE uid = ?',
+        [uid]
+      );
+      const bal = rows[0] && typeof rows[0].balance === 'number' ? rows[0].balance : credits;
 
-    // 2. 读 balanceAfter
-    const updatedDoc = await db.collection('user_credits').doc(uid).get();
-    const updatedData = Array.isArray(updatedDoc.data) ? updatedDoc.data[0] : updatedDoc.data;
-    const balanceAfter = (updatedData && typeof updatedData.balance === 'number')
-      ? updatedData.balance
-      : credits;
+      await conn.execute(
+        `INSERT INTO credit_transactions (uid, type, amount, balance_after, meta, created_at)
+         VALUES (?, 'recharge_paid', ?, ?, ?, ?)`,
+        [uid, credits, bal, JSON.stringify({ amount, channel: 'direct', currency: 'CNY' }), now]
+      );
 
-    // 3. 写消费流水(recharge_paid)
-    await db.collection('credit_transactions').add({
-      uid,
-      type: 'recharge_paid',
-      amount: credits,
-      balanceAfter,
-      meta: { amount, channel: 'direct', currency: 'CNY' },
-      createdAt: now,
-    });
+      // 审计订单(channel 枚举没有 direct,归到 mock,交易号前缀 DIRECT 标识来源)
+      const orderId = `D${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
+      await conn.execute(
+        `INSERT INTO recharge_orders
+           (id, uid, channel, pay_amount, credits, status, qr_code_data, third_trade_no, fail_reason, created_at, expires_at, paid_at)
+         VALUES (?, ?, 'mock', ?, ?, 'paid', NULL, ?, NULL, ?, ?, ?)`,
+        [orderId, uid, amount, credits, `DIRECT${Date.now()}`, now, now, now]
+      );
 
-    // 4. 写审计订单记录
-    const orderId = `D${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
-    await db.collection('recharge_orders').add({
-      _id: orderId,
-      uid,
-      channel: 'direct',
-      payAmount: amount,
-      credits,
-      status: 'paid',
-      qrCodeData: null,
-      thirdTradeNo: `DIRECT${Date.now()}`,
-      failReason: null,
-      createdAt: now,
-      expiresAt: now,
-      paidAt: now,
+      return bal;
     });
 
     return ok({ balanceAfter, credits });

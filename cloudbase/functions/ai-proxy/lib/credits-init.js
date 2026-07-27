@@ -1,6 +1,10 @@
 /**
  * 用户积分的"懒初始化"工具函数(MySQL 版,迁自 doc DB 实现)。
  *
+ * 所有接触 user_credits 表的入口(ai-proxy / get-balance / 充值类函数)统一用本版本。
+ * (历史:曾存在 doc DB 版与 MySQL 版并存,get-balance 读 doc、ai-proxy 扣 MySQL,
+ *  导致用户看不到消耗。2026-07 已统一为 MySQL。)
+ *
  * 任何接触 user_credits 表的入口(ai-proxy / get-balance / mock-pay / 未来的充值)
  * 都应该先调一次 ensureUserCredits,保证:
  *   1. 用户首次出现时建立 user_credits 行
