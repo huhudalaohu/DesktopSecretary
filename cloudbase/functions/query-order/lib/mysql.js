@@ -69,7 +69,12 @@ async function getConnection() {
   }
   if (!pending) {
     const cfg = readConfig();
+    // 冷启动时 VPC ENI 可能尚未就绪,偶发 ETIMEDOUT/ECONNREFUSED —— 失败后 1s 重试一次
     pending = mysql.createConnection(cfg)
+      .catch((err) => {
+        console.warn('[mysql] 首次连接失败,1s 后重试一次:', err && err.message);
+        return new Promise((r) => setTimeout(r, 1000)).then(() => mysql.createConnection(cfg));
+      })
       .then((conn) => {
         active = conn;
         pending = null;

@@ -57,13 +57,15 @@ exports.main = async (event, context) => {
     let recentTransactions = [];
     try {
       const conn = await getConnection();
+      // 注意:LIMIT 不能用占位符 —— mysql2 execute 走预处理语句,
+      // 腾讯云 MySQL 对 LIMIT ? 报 ER_WRONG_ARGUMENTS。RECENT_TX_LIMIT 是本地常量,直接内联。
       const [rows] = await conn.execute(
         `SELECT type, amount, balance_after, meta, created_at
            FROM credit_transactions
           WHERE uid = ?
           ORDER BY id DESC
-          LIMIT ?`,
-        [uid, RECENT_TX_LIMIT]
+          LIMIT ${RECENT_TX_LIMIT}`,
+        [uid]
       );
       recentTransactions = rows.map((r) => ({
         type: r.type,
