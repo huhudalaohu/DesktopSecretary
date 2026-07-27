@@ -12,10 +12,11 @@ import QuickLinks from './features/files/components/QuickLinks';
 import Timeline from './features/reminders/components/Timeline';
 import SettingsPanel from './features/settings/components/SettingsPanel';
 import RechargeModal from './features/credits/RechargeModal';
+import OnboardingTutorial from './features/onboarding/OnboardingTutorial';
 import { DEFAULT_REMINDER_LEVELS } from './features/reminders/components/ReminderLevelSettings';
 import { DEFAULT_AI_SETTINGS } from './config/ai-config';
 import { DEFAULT_MODULE_VISIBILITY, normalizeModuleVisibility } from './config/module-visibility';
-import { X, Pin, PinOff, Settings } from 'lucide-react';
+import { X, Pin, PinOff, Settings, HelpCircle } from 'lucide-react';
 import {
   DndContext,
   useSensor,
@@ -49,6 +50,9 @@ export default function App() {
 
   // 充值弹窗(放在根级避免被设置面板的 overflow 裁剪)
   const [rechargeOpen, setRechargeOpen] = useState(false);
+
+  // 新手教程(首次启动自动弹出,之后从左下角「教程」按钮打开)
+  const [tourOpen, setTourOpen] = useState(false);
 
   // ========== Hooks ==========
   const settings = useSettings(api);
@@ -277,6 +281,13 @@ export default function App() {
     };
   }, [reloadAllData]);
 
+  // 首次启动:未看过教程则自动弹出
+  useEffect(() => {
+    api.storeGet('onboardingDone', false).then((done) => {
+      if (!done) setTourOpen(true);
+    }).catch(() => {});
+  }, []);
+
   // ========== Dock 操作 ==========
   const handleTogglePin = useCallback(async () => {
     const result = await api.dockTogglePin();
@@ -311,7 +322,7 @@ export default function App() {
     <div className="h-full flex flex-col rounded-lg overflow-hidden relative">
       {/* 标题栏 */}
       <div className="flex items-center justify-end px-4 py-2 drag-region">
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1" data-tour="titlebar-btns">
           <button
             onClick={handleTogglePin}
             className={`p-1 rounded-fluent transition-colors ${
@@ -480,9 +491,18 @@ export default function App() {
         )}
 
         {/* 底部操作栏 */}
-        <div className="flex items-center justify-end px-4 py-1.5 border-t border-fluent-stroke-divider gap-1">
+        <div className="flex items-center justify-between px-4 py-1.5 border-t border-fluent-stroke-divider gap-1">
+          <button
+            onClick={() => setTourOpen(true)}
+            className="flex items-center px-1.5 py-1 rounded-fluent transition-colors text-fluent-text-tertiary hover:text-fluent-text-secondary hover:bg-fluent-fill-hover"
+            title="新手教程"
+          >
+            <HelpCircle size={14} />
+            <span className="text-[12px] font-normal text-fluent-text-tertiary ml-0.5">教程</span>
+          </button>
           <button
             ref={settings.settingsButtonRef}
+            data-tour="settings-btn"
             onClick={() => settings.setShowSettings(!settings.showSettings)}
             className={`flex items-center px-1.5 py-1 rounded-fluent transition-colors ${
               settings.showSettings ? 'bg-fluent-accent-light text-fluent-accent' : 'text-fluent-text-tertiary hover:text-fluent-text-secondary hover:bg-fluent-fill-hover'
@@ -494,6 +514,11 @@ export default function App() {
           </button>
         </div>
       </div>{/* /字号缩放区域 */}
+
+      {/* 新手教程 */}
+      {tourOpen && (
+        <OnboardingTutorial onClose={() => setTourOpen(false)} />
+      )}
 
       {/* 充值弹窗:渲染在 zoom 容器外,避免被缩放和被设置面板 overflow 裁剪 */}
       {rechargeOpen && (

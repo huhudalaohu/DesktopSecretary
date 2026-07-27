@@ -202,7 +202,7 @@ export default function Timeline({ activeWorkspace, reminderLevels, onFocusTodo 
   const isEmpty = workspaceTodos.length === 0;
 
   return (
-    <div className="px-4 mt-[3px] mb-2 select-none">
+    <div className="px-4 mt-[3px] mb-2 select-none" data-tour="timeline">
       {/* 头部：标题（与其他分区一致）+ 视图控制 */}
       <div className="flex items-center justify-between mb-2">
         <span className="text-[15px] font-semibold text-fluent-text-primary">时间轴</span>

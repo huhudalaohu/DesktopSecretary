@@ -14,6 +14,15 @@ import { fetchBalance, CallAIError } from '../../../services/ai-proxy';
 
 const api = window.desktopAPI;
 
+// 邮箱输入归一化:中文输入法容易混入全角 ＠/．/。,复制粘贴可能带零宽字符,
+// 不归一化会被格式校验误判为「邮箱格式不正确」
+const normalizeEmail = (s) => (s || '')
+  .replace(/＠/g, '@')
+  .replace(/[．。｡]/g, '.')
+  .replace(/[\u200B-\u200D\uFEFF]/g, '') // 零宽字符
+  .trim()
+  .toLowerCase();
+
 /**
  * v2: 注册/登录通过 @cloudbase/js-sdk 直连 CloudBase 身份认证服务,
  *     主进程只负责把 uid 同步给同步引擎(api.authSetUid / api.authClearUid)。
@@ -117,7 +126,7 @@ export default function SyncPanel() {
   };
 
   const handleSendCode = async () => {
-    const email = username.trim().toLowerCase();
+    const email = normalizeEmail(username);
     if (!email) {
       showMsg('请先输入邮箱地址');
       return;
@@ -147,7 +156,7 @@ export default function SyncPanel() {
   };
 
   const handleLoginPassword = async () => {
-    const email = username.trim().toLowerCase();
+    const email = normalizeEmail(username);
     if (!email || !password) {
       showMsg('请输入邮箱和密码');
       return;
@@ -181,7 +190,7 @@ export default function SyncPanel() {
   };
 
   const handleLoginCode = async () => {
-    const email = username.trim().toLowerCase();
+    const email = normalizeEmail(username);
     if (!email || !code || code.length !== 6) {
       showMsg('请输入邮箱和 6 位验证码');
       return;
@@ -222,7 +231,7 @@ export default function SyncPanel() {
   };
 
   const handleRegister = async () => {
-    const email = username.trim().toLowerCase();
+    const email = normalizeEmail(username);
     if (!email || !password) {
       showMsg('请输入邮箱和密码');
       return;

@@ -100,6 +100,7 @@ export default function WorkspaceSwitcher({ workspaces, active, onSwitch, onAdd,
       <div>
         <div
           ref={scrollContainerRef}
+          data-tour="workspace-tabs"
           className="edge-tabs-scroll flex items-end overflow-x-auto px-1 pt-1.5"
           onContextMenu={(e) => e.preventDefault()}
           onWheel={(e) => {

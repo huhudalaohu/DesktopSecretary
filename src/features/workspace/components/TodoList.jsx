@@ -553,6 +553,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
         </button>
         <button
           type="button"
+          data-tour="screenshot-btn"
           onClick={() => {
             console.log('[TodoList] camera clicked, onScreenshot=', onScreenshot);
             if (typeof onScreenshot === 'function') onScreenshot();
@@ -571,11 +572,11 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
 
       {/* ===== 待办列表 ===== */}
       {filteredTodos.length === 0 ? (
-        <div className="text-[12px] font-normal text-fluent-text-tertiary py-2 text-center">
+        <div data-tour="todo-item" className="text-[12px] font-normal text-fluent-text-tertiary py-2 text-center">
           {statusFilter === 'all' && priorityFilter === 'all' ? '暂无待办' : '没有符合条件的待办'}
         </div>
       ) : (
-        <div ref={listRef} className="todo-scroll space-y-1 max-h-[166px] overflow-y-auto">
+        <div ref={listRef} data-tour="todo-item" className="todo-scroll space-y-1 max-h-[166px] overflow-y-auto">
           {filteredTodos.map((todo) => {
             const pc = PRIORITY_CONFIG[todo.priority || 'medium'];
             return (
