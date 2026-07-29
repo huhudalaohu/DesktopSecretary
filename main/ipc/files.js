@@ -21,6 +21,29 @@ function registerFilesIpcHandlers({ storeManager, getMainWindow, platform }) {
     }
   });
 
+  // list-dir:列出指定目录内容(文件导航多级级联浏览用)
+  // 隐藏文件过滤;文件夹排前、文件在后,各自按名称排序;截断 200 条防卡顿
+  // 失败返回 error 字段而不弹系统对话框(目录无权限是常态)
+  ipcMain.handle('list-dir', async (_event, dirPath) => {
+    try {
+      if (!dirPath || typeof dirPath !== 'string') return { entries: [], error: 'invalid path' };
+      const dirents = await fs.promises.readdir(dirPath, { withFileTypes: true });
+      const dirs = [];
+      const files = [];
+      for (const d of dirents) {
+        if (d.name.startsWith('.')) continue;
+        const entry = { name: d.name, path: path.join(dirPath, d.name), isDirectory: d.isDirectory() };
+        (d.isDirectory() ? dirs : files).push(entry);
+      }
+      const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+      dirs.sort(byName);
+      files.sort(byName);
+      return { entries: dirs.concat(files).slice(0, 200) };
+    } catch (err) {
+      return { entries: [], error: err.message };
+    }
+  });
+
   // get-screen-info
   ipcMain.handle('get-screen-info', () => {
     return screen.getAllDisplays().map(d => ({

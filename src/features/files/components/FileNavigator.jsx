@@ -7,23 +7,10 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 
-import {
-  Folder,
-  LayoutGrid,
-  List,
-  Trash2,
-  File,
-  FileImage,
-  FileVideo,
-  FileMusic,
-  FileText,
-  FileSpreadsheet,
-  FileCode2,
-  Package,
-  AppWindow,
-  Database,
-  Link,
-} from 'lucide-react';
+import { LayoutGrid, List, Trash2 } from 'lucide-react';
+import FileTypeIcon, { getFileKind } from './FileTypeIcon';
+import FolderCascadeMenu from './FolderCascadeMenu';
+import { measureVisualRect } from '../../../utils/measureVisualRect';
 
 const api = window.desktopAPI;
 
@@ -75,47 +62,6 @@ function useOverflowTooltip() {
   return { bindRef, handleEnter, handleLeave, TooltipNode };
 }
 
-function getFileKind(path) {
-  const last = path.replace(/\\/g, '/').split('/').pop() || '';
-  if (!last.includes('.')) return 'folder';
-  const ext = last.split('.').pop().toLowerCase();
-  const map = {
-    image: ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp', 'svg', 'ico', 'tiff', 'heic'],
-    video: ['mp4', 'avi', 'mkv', 'mov', 'wmv', 'flv', 'webm'],
-    audio: ['mp3', 'wav', 'flac', 'aac', 'ogg', 'wma', 'm4a'],
-    doc: ['txt', 'md', 'doc', 'docx', 'pdf', 'rtf', 'odt', 'pages'],
-    sheet: ['xls', 'xlsx', 'csv', 'ods', 'numbers'],
-    code: ['js', 'jsx', 'ts', 'tsx', 'html', 'htm', 'css', 'scss', 'less', 'py', 'java', 'cpp', 'c', 'cc', 'h', 'hpp', 'go', 'rs', 'swift', 'kt', 'json', 'xml', 'yaml', 'yml', 'sql', 'php', 'rb', 'lua', 'sh', 'ps1', 'bat', 'cmd', 'dockerfile', 'vue', 'svelte'],
-    archive: ['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz'],
-    app: ['exe', 'msi', 'appimage', 'dmg'],
-    db: ['db', 'sqlite', 'mdb', 'accdb'],
-    link: ['lnk', 'url'],
-  };
-  for (const [kind, exts] of Object.entries(map)) {
-    if (exts.includes(ext)) return kind;
-  }
-  return 'file';
-}
-
-function FileTypeIcon({ path, size = 18 }) {
-  const kind = getFileKind(path);
-  const props = { size, className: 'flex-shrink-0' };
-  switch (kind) {
-    case 'folder': return <Folder {...props} className={`${props.className} text-fluent-accent`} />;
-    case 'image': return <FileImage {...props} className={`${props.className} text-pink-400`} />;
-    case 'video': return <FileVideo {...props} className={`${props.className} text-purple-400`} />;
-    case 'audio': return <FileMusic {...props} className={`${props.className} text-amber-400`} />;
-    case 'doc': return <FileText {...props} className={`${props.className} text-blue-400`} />;
-    case 'sheet': return <FileSpreadsheet {...props} className={`${props.className} text-green-500`} />;
-    case 'code': return <FileCode2 {...props} className={`${props.className} text-cyan-500`} />;
-    case 'archive': return <Package {...props} className={`${props.className} text-orange-400`} />;
-    case 'app': return <AppWindow {...props} className={`${props.className} text-indigo-400`} />;
-    case 'db': return <Database {...props} className={`${props.className} text-teal-500`} />;
-    case 'link': return <Link {...props} className={`${props.className} text-sky-400`} />;
-    default: return <File {...props} className={`${props.className} text-gray-400`} />;
-  }
-}
-
 /** 截取路径的最后两级目录用于显示 */
 function truncatePath(p) {
   const parts = p.replace(/\\/g, '/').split('/');
@@ -135,6 +81,77 @@ export default function FileNavigator({ activeWorkspace }) {
   const [dragOverIndex, setDragOverIndex] = useState(null);
   const dragSourceIndexRef = useRef(null);
 
+  // 多级级联浏览
+  const [cascadeEnabled, setCascadeEnabled] = useState(true);
+  const [cascade, setCascade] = useState(null); // { itemId, path, anchorEl }
+  const itemRefs = useRef(new Map());
+  const hoverTimerRef = useRef(null);
+  const closeTimerRef = useRef(null);
+
+  const bindItemRef = (id) => (el) => {
+    if (el) itemRefs.current.set(id, el);
+  };
+
+  const clearCascadeTimers = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+  };
+
+  const closeCascade = () => {
+    clearCascadeTimers();
+    setCascade(null);
+  };
+
+  const handleItemEnter = (item) => {
+    if (!cascadeEnabled || draggingIndex !== null) return;
+    if (getFileKind(item.path) !== 'folder') return;
+    clearCascadeTimers();
+    hoverTimerRef.current = setTimeout(() => {
+      const el = itemRefs.current.get(item.id);
+      if (el) setCascade({ itemId: item.id, path: item.path, anchorEl: el });
+    }, 300);
+  };
+
+  const handleItemLeave = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    if (cascade) {
+      // 留 150ms 宽限让鼠标移进弹窗(hover 桥)
+      closeTimerRef.current = setTimeout(() => setCascade(null), 150);
+    }
+  };
+
+  const handleMenuHover = (inside) => {
+    if (inside) {
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current);
+    } else {
+      closeCascade();
+    }
+  };
+
+  const handleCascadeOpen = (path) => {
+    closeCascade();
+    handleOpenFolder(path);
+  };
+
+  const handleCascadeToggle = async () => {
+    const next = !cascadeEnabled;
+    setCascadeEnabled(next);
+    if (!next) closeCascade();
+    await api.storeSet('fileNavCascadeEnabled', next);
+  };
+
+  // 内容滚动时关闭弹窗,避免定位漂移(级联菜单自身的滚动除外)
+  useEffect(() => {
+    if (!cascade) return;
+    const onScroll = (e) => {
+      if (e.target && e.target.closest && e.target.closest('[data-cascade-menu]')) return;
+      closeCascade();
+    };
+    document.addEventListener('scroll', onScroll, true);
+    return () => document.removeEventListener('scroll', onScroll, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [!!cascade]);
+
   const tooltip = useOverflowTooltip();
 
   // 加载数据 + 一次性迁移旧数据
@@ -143,6 +160,10 @@ export default function FileNavigator({ activeWorkspace }) {
       // 视图模式
       const savedView = await api.storeGet(viewKey, 'icons');
       setViewMode(['icons', 'details'].includes(savedView) ? savedView : 'icons');
+
+      // 多级浏览开关(默认开)
+      const savedCascade = await api.storeGet('fileNavCascadeEnabled', true);
+      setCascadeEnabled(savedCascade !== false);
 
       // 新键
       let data = await api.storeGet(storeKey, null);
@@ -290,6 +311,21 @@ export default function FileNavigator({ activeWorkspace }) {
         <span className="text-[15px] font-semibold text-fluent-text-primary">文件导航</span>
         <div className="flex items-center gap-1">
           <button
+            onClick={handleCascadeToggle}
+            className={`relative w-7 h-4 rounded-full transition-colors mr-1 ${
+              cascadeEnabled
+                ? 'bg-fluent-accent'
+                : 'bg-fluent-fill-hover border border-fluent-stroke-control'
+            }`}
+            title={cascadeEnabled ? '关闭悬停浏览文件夹' : '开启悬停浏览文件夹'}
+          >
+            <span
+              className={`absolute top-[2px] w-3 h-3 rounded-full bg-white shadow transition-all ${
+                cascadeEnabled ? 'left-[14px]' : 'left-[2px]'
+              }`}
+            />
+          </button>
+          <button
             onClick={() => handleViewChange('icons')}
             className={`icon-btn ${
               viewMode === 'icons'
@@ -316,6 +352,7 @@ export default function FileNavigator({ activeWorkspace }) {
 
       {/* 内容区域（拖拽接收区） */}
       <div
+        data-tour="file-nav"
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -334,13 +371,16 @@ export default function FileNavigator({ activeWorkspace }) {
             {shortcuts.map((item, index) => (
               <div
                 key={item.id}
+                ref={bindItemRef(item.id)}
                 draggable
                 onDragStart={(e) => handleDragStart(e, index)}
                 onDragEnd={handleDragEnd}
                 onDragOver={(e) => handleDragOverReorder(e, index)}
                 onDragLeave={handleDragLeaveReorder}
                 onDrop={(e) => handleDropReorder(e, index)}
-                onClick={() => handleOpenFolder(item.path)}
+                onDoubleClick={() => handleOpenFolder(item.path)}
+                onMouseEnter={() => handleItemEnter(item)}
+                onMouseLeave={handleItemLeave}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setContextMenu({ x: e.clientX, y: e.clientY, item });
@@ -382,13 +422,16 @@ export default function FileNavigator({ activeWorkspace }) {
             {shortcuts.map((item, index) => (
               <div
                 key={item.id}
+                ref={bindItemRef(item.id)}
                 draggable
                 onDragStart={(e) => handleDragStart(e, index)}
                 onDragEnd={handleDragEnd}
                 onDragOver={(e) => handleDragOverReorder(e, index)}
                 onDragLeave={handleDragLeaveReorder}
                 onDrop={(e) => handleDropReorder(e, index)}
-                onClick={() => handleOpenFolder(item.path)}
+                onDoubleClick={() => handleOpenFolder(item.path)}
+                onMouseEnter={() => handleItemEnter(item)}
+                onMouseLeave={handleItemLeave}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   setContextMenu({ x: e.clientX, y: e.clientY, item });
@@ -429,6 +472,17 @@ export default function FileNavigator({ activeWorkspace }) {
       </div>
 
       {tooltip.TooltipNode}
+
+      {/* 多级级联浏览弹窗 */}
+      {cascade && (
+        <FolderCascadeMenu
+          anchorRect={measureVisualRect(cascade.anchorEl)}
+          rootPath={cascade.path}
+          onOpen={handleCascadeOpen}
+          onHoverChange={handleMenuHover}
+          onRequestClose={closeCascade}
+        />
+      )}
 
       {/* 右键菜单 */}
       {contextMenu && (

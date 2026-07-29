@@ -31,6 +31,9 @@ contextBridge.exposeInMainWorld('desktopAPI', {
   /** 移动文件到目标文件夹（会弹出系统确认对话框） */
   moveFiles: (fromPaths, toDir) => ipcRenderer.invoke('move-files', fromPaths, toDir),
 
+  /** 列出目录内容（文件导航多级级联浏览），返回 {entries:[{name,path,isDirectory}], error?} */
+  listDir: (dirPath) => ipcRenderer.invoke('list-dir', dirPath),
+
   // ========== 截图 ==========
 
   /**

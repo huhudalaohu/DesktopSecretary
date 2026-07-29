@@ -419,7 +419,7 @@ export default function App() {
           <div className="flex-1 overflow-y-auto px-4 pb-4 space-y-6">
           {moduleVisibility.quickLinks && <QuickLinks activeWorkspace={activeWorkspace} />}
           {moduleVisibility.fileNavigator && <FileNavigator activeWorkspace={activeWorkspace} />}
-          {moduleVisibility.quickNote && <QuickNote />}
+          {moduleVisibility.quickNote && <QuickNote activeWorkspace={activeWorkspace} />}
           {moduleVisibility.aiAssistant && (
             <AIAssistant
               settings={settings.aiSettings}

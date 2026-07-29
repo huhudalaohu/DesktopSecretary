@@ -15,9 +15,10 @@ const SYNC_KEYS = [
 ];
 
 // 动态 key 前缀：需要扫描 store 中所有匹配的 key
-const DYNC_KEY_PREFIXES = [
+const DYNC_KEY_PREFIXES = [
   'quickLinks:',
   'fileShortcuts:',
+  'quickNote:',
 ];
 
 // 不同步的设备本地 key

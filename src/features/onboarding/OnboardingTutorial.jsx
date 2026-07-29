@@ -11,13 +11,16 @@
  */
 
 import React, { useEffect, useLayoutEffect, useState, useCallback } from 'react';
-import { X, Camera, LayoutGrid, Clock, Pin, Settings, MousePointer2, HandMetal } from 'lucide-react';
+import { X, Camera, LayoutGrid, Clock, Pin, Settings, MousePointer2, HandMetal, FolderOpen } from 'lucide-react';
+import { measureVisualRect } from '../../utils/measureVisualRect';
 
 const api = window.desktopAPI;
 
 const PAD = 6;           // 高亮框相对目标的扩张
 const TOOLTIP_W = 264;   // 气泡宽度
 const TOOLTIP_H = 150;   // 气泡估算高度(用于上下位置决策)
+
+// measureVisualRect 已抽到 src/utils/measureVisualRect.js(级联弹窗共用)
 
 const STEPS = [
   {
@@ -49,6 +52,12 @@ const STEPS = [
     icon: Clock,
     title: '时间轴',
     desc: '每个圆点代表一条带提醒的待办,颜色对应提醒级别。双击圆点可以直接跳转定位到那条待办。',
+  },
+  {
+    selector: '[data-tour="file-nav"]',
+    icon: FolderOpen,
+    title: '文件导航',
+    desc: '从资源管理器把文件夹拖进来添加快捷方式,双击直接打开。鼠标悬停文件夹会弹出内容预览:点击文件夹进入下一层,点击左边一栏返回上一层,双击条目直接打开。标题旁的小开关可以关掉这个功能。',
   },
   {
     selector: '[data-tour="titlebar-btns"]',
@@ -88,16 +97,21 @@ export default function OnboardingTutorial({ onClose }) {
     return () => document.removeEventListener('keydown', onKey);
   }, [finish]);
 
-  // 锚点定位(步骤切换 / 窗口缩放时重算)
+  // 锚点定位(步骤切换 / 窗口缩放 / 内容滚动时重算)
   useLayoutEffect(() => {
     const compute = () => {
       if (!current.selector) { setRect(null); return; }
       const el = document.querySelector(current.selector);
-      setRect(el ? el.getBoundingClientRect() : null);
+      setRect(el ? measureVisualRect(el) : null);
     };
     compute();
     window.addEventListener('resize', compute);
-    return () => window.removeEventListener('resize', compute);
+    // 捕获阶段监听滚动:待办列表/标签栏滚动时高亮框跟着走
+    document.addEventListener('scroll', compute, true);
+    return () => {
+      window.removeEventListener('resize', compute);
+      document.removeEventListener('scroll', compute, true);
+    };
   }, [current]);
 
   const winW = window.innerWidth;
@@ -114,6 +128,7 @@ export default function OnboardingTutorial({ onClose }) {
   // 气泡位置:优先放目标下方,空间不够放上方;横向居中并夹紧在窗口内
   let tipStyle = {};
   let arrow = null; // 'up' | 'down'(箭头指向目标)
+  let arrowLeft = null; // 箭头在气泡内的横向位置(对准目标中心)
   if (hl) {
     const below = hl.top + hl.height + 10 + TOOLTIP_H < winH;
     const centerX = hl.left + hl.width / 2;
@@ -122,6 +137,8 @@ export default function OnboardingTutorial({ onClose }) {
       ? { left, top: hl.top + hl.height + 12 }
       : { left, top: Math.max(hl.top - TOOLTIP_H - 12, 8) };
     arrow = below ? 'up' : 'down';
+    // 气泡被夹紧后箭头不能死守 50%,要对准目标中心
+    arrowLeft = Math.min(Math.max(centerX - left, 14), TOOLTIP_W - 14);
   }
 
   const Icon = current.icon;
@@ -155,8 +172,8 @@ export default function OnboardingTutorial({ onClose }) {
           <div
             className="absolute w-2.5 h-2.5 bg-fluent-surface-flyout border-fluent-stroke-card rotate-45"
             style={arrow === 'up'
-              ? { top: -6, left: '50%', marginLeft: -5, borderLeftWidth: 1, borderTopWidth: 1 }
-              : { bottom: -6, left: '50%', marginLeft: -5, borderRightWidth: 1, borderBottomWidth: 1 }}
+              ? { top: -6, left: arrowLeft, marginLeft: -5, borderLeftWidth: 1, borderTopWidth: 1 }
+              : { bottom: -6, left: arrowLeft, marginLeft: -5, borderRightWidth: 1, borderBottomWidth: 1 }}
           />
         )}
 
