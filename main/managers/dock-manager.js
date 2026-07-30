@@ -45,6 +45,10 @@ class DockManager {
     this.suppressMoveHint = false;
     this.suppressMoveHintTimer = null;
     this.lastHandleWindowMovedTime = 0;
+
+    // 停靠触发条(收起时的 3px 悬停条)与停靠所在显示器
+    this.stripWindow = null;
+    this.dockedDisplayId = null;
   }
 
   /** 从 store 恢复状态 */
@@ -69,6 +73,53 @@ class DockManager {
     this.dockBounds = this.state.get('dockBounds', null);
     this.dockEdgeOffset = this.state.get('dockEdgeOffset', null);
     this.dockPinned = this.state.get('dockPinned', true);
+    this.dockedDisplayId = this.state.get('dockDisplayId', null);
+  }
+
+  /** 停靠发生时所在的显示器(多屏时不跳屏);找不到回退主屏 */
+  _getDockedDisplay() {
+    const all = this.screen.getAllDisplays();
+    return all.find((d) => d.id === this.dockedDisplayId) || this.screen.getPrimaryDisplay();
+  }
+
+  /**
+   * 停靠触发条:Windows 强制窗口最小约 47x38,主窗口无法缩成 3px 细条
+   * (transparent 窗口例外,可缩到 ~4px)。收起时主窗口移到屏幕外,
+   * 用这个透明小窗当悬停触发条。
+   */
+  _ensureStrip() {
+    if (this.stripWindow && !this.stripWindow.isDestroyed()) return this.stripWindow;
+    const { BrowserWindow } = require('electron');
+    const strip = new BrowserWindow({
+      frame: false,
+      transparent: true,
+      resizable: false,
+      movable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      focusable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      hasShadow: false,
+      show: false,
+      width: 8,
+      height: 8,
+      webPreferences: { sandbox: true },
+    });
+    strip.setAlwaysOnTop(true, 'screen-saver');
+    strip.setIgnoreMouseEvents(true); // 纯展示,悬停由轮询判定,不吃鼠标事件
+    strip.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
+      '<html><body style="margin:0;height:100vh;background:rgba(0,120,212,0.45);border-radius:2px;"></body></html>'
+    ));
+    strip.on('closed', () => { if (this.stripWindow === strip) this.stripWindow = null; });
+    this.stripWindow = strip;
+    return strip;
+  }
+
+  destroyStrip() {
+    if (this.stripWindow && !this.stripWindow.isDestroyed()) this.stripWindow.destroy();
+    this.stripWindow = null;
   }
 
   /** 将窗口定位到 Dock 位置 */
@@ -79,19 +130,20 @@ class DockManager {
     this._suppressHint(200);
 
     if (this.dockedEdge === null) {
+      this.destroyStrip();
       if (this.dockBounds) win.setBounds(this.dockBounds, false);
       return;
     }
 
-    const primaryDisplay = this.screen.getPrimaryDisplay();
-    const { width: sw, height: sh } = primaryDisplay.size;
-    const { x: bx, y: by } = primaryDisplay.bounds;
+    const display = this._getDockedDisplay();
+    const { width: sw, height: sh } = display.size;
+    const { x: bx, y: by } = display.bounds;
     const defaultH = Math.round(sh * DOCK_HEIGHT_RATIO);
 
     let x, y, w, h;
 
     if (this.dockedEdge === 'right' || this.dockedEdge === 'left') {
-      w = expanded ? this.dockExpandedWidth : DOCK_EDGE_WIDTH;
+      w = this.dockExpandedWidth;
       h = this.dockEdgeOffset?.height ?? defaultH;
       h = Math.max(DOCK_MIN_HEIGHT, Math.min(sh, h));
       const defaultY = by + Math.round((sh - h) / 2);
@@ -101,14 +153,32 @@ class DockManager {
     } else if (this.dockedEdge === 'top') {
       const storedW = this.dockEdgeOffset?.width ?? this.dockExpandedWidth;
       w = Math.max(DOCK_MIN_WIDTH, Math.min(sw, storedW));
-      h = expanded ? Math.max(DOCK_MIN_HEIGHT, Math.min(sh, this.dockEdgeOffset?.height ?? defaultH)) : DOCK_EDGE_WIDTH;
+      h = Math.max(DOCK_MIN_HEIGHT, Math.min(sh, this.dockEdgeOffset?.height ?? defaultH));
       const defaultX = bx + Math.round((sw - w) / 2);
       x = this.dockEdgeOffset?.x ?? defaultX;
       x = Math.max(bx, Math.min(bx + sw - w, x));
       y = by;
     }
 
-    win.setBounds({ x, y, width: w, height: h }, true);
+    if (expanded) {
+      this.destroyStrip();
+      win.setBounds({ x, y, width: w, height: h }, true);
+      return;
+    }
+
+    // 收起:显示 3px 触发条,主窗口直接 hide()。
+    // 不把主窗口缩成细条(Windows 强制最小 ~47x38),也不移到屏幕外——
+    // 移出屏幕会落到别的显示器上,且窗口 DPI 跟着那块屏走,
+    // 再 setBounds 回来尺寸会被另一个缩放比解释,展开后窗口变大。
+    let stripRect;
+    if (this.dockedEdge === 'right') stripRect = { x: bx + sw - DOCK_EDGE_WIDTH, y, width: DOCK_EDGE_WIDTH, height: h };
+    else if (this.dockedEdge === 'left') stripRect = { x: bx, y, width: DOCK_EDGE_WIDTH, height: h };
+    else stripRect = { x, y: by, width: w, height: DOCK_EDGE_WIDTH };
+
+    const strip = this._ensureStrip();
+    strip.setBounds(stripRect);
+    strip.showInactive();
+    win.hide();
   }
 
   expand(reason) {
@@ -171,7 +241,11 @@ class DockManager {
       }
 
       const cursor = this.screen.getCursorScreenPoint();
-      const bounds = win.getBounds();
+      // 收起时悬停目标是触发条(主窗口在屏幕外),展开时是主窗口
+      const tracked = (!this.dockExpanded && this.stripWindow && !this.stripWindow.isDestroyed())
+        ? this.stripWindow
+        : win;
+      const bounds = tracked.getBounds();
 
       const inHotZone = !this.dockExpanded && (
         cursor.x >= bounds.x - DOCK_HOT_ZONE_WIDTH &&
@@ -242,6 +316,10 @@ class DockManager {
 
     if (targetEdge !== null) {
       this.dockedEdge = targetEdge;
+      // 记录吸附发生时的显示器,positionWindow 用它定位(不再固定主屏)
+      const display = this.screen.getDisplayMatching(b);
+      this.dockedDisplayId = display.id;
+      this.state.set('dockDisplayId', display.id);
       if (targetEdge === 'right' || targetEdge === 'left') {
         this.dockEdgeOffset = { y: b.y, height: b.height };
         this.dockExpandedWidth = Math.max(DOCK_MIN_WIDTH, Math.min(DOCK_MAX_WIDTH, b.width));
@@ -301,9 +379,9 @@ class DockManager {
 
   /** 获取窗口初始 bounds */
   getInitialBounds() {
-    const primaryDisplay = this.screen.getPrimaryDisplay();
-    const { width: sw, height: sh } = primaryDisplay.size;
-    const { x: bx, y: by } = primaryDisplay.bounds;
+    const display = this._getDockedDisplay();
+    const { width: sw, height: sh } = display.size;
+    const { x: bx, y: by } = display.bounds;
     const defaultH = Math.round(sh * DOCK_HEIGHT_RATIO);
 
     let x, y, w, h;

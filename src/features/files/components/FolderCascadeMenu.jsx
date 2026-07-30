@@ -4,6 +4,8 @@
  * 文件导航悬停文件夹时弹出第 1 层内容;菜单内部点击驱动:点击最深栏
  * 文件夹向右展开下一层(层数不限),点击父栏收回右侧层级;
  * 双击任意条目调用系统打开;Esc 或鼠标移出关闭。
+ * 单击先高亮、结构动作延迟 500ms(对齐系统双击间隔),双击优先,
+ * 避免快慢双击被误判成两次单击。
  *
  * 定位注意:anchorRect 必须来自 measureVisualRect(zoom 容器内
  * getBoundingClientRect 不可靠,见 src/utils/measureVisualRect.js)。
@@ -96,23 +98,41 @@ export default function FolderCascadeMenu({ anchorRect, rootPath, onOpen, onHove
     }, 180);
   };
 
+  // 单击延迟执行,给双击留出判定窗口:双击间隔内出现第二击(双击打开)
+  // 就取消单击的跳层/收起动作,避免「双击不够快被当成两次单击」。
+  // 点击立刻给选中高亮作即时反馈,结构动作延迟 500ms(对齐 Windows 默认双击间隔)。
+  const clickTimerRef = useRef(null);
+  useEffect(() => () => { if (clickTimerRef.current) clearTimeout(clickTimerRef.current); }, []);
+
   const handleRowClick = (levelIndex, entry) => {
-    const isDeepest = levelIndex === levels.length - 1;
-    if (!entry.isDirectory) {
-      if (!isDeepest) collapseAfter(levelIndex); // 父栏文件行:收起右侧层级
-      return;
-    }
-    const isExpanded =
-      selected[levelIndex] === entry.name && levels[levelIndex + 1]?.path === entry.path;
-    if (!isDeepest && isExpanded) {
-      collapseAfter(levelIndex); // 点击父栏已展开的行:返回本层
-      return;
-    }
-    handleClickFolder(levelIndex, entry); // 最深栏进入下一级 / 父栏切换分支
+    if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
+    // 即时反馈:先只更新高亮,不动层级
+    setSelected((s) => { const n = s.slice(0, levelIndex); n[levelIndex] = entry.name; return n; });
+    clickTimerRef.current = setTimeout(() => {
+      clickTimerRef.current = null;
+      const isDeepest = levelIndex === levels.length - 1;
+      if (!entry.isDirectory) {
+        if (!isDeepest) collapseAfter(levelIndex); // 父栏文件行:收起右侧层级
+        return;
+      }
+      const isExpanded = levels[levelIndex + 1]?.path === entry.path;
+      if (!isDeepest && isExpanded) {
+        collapseAfter(levelIndex); // 点击父栏已展开的行:返回本层
+        return;
+      }
+      handleClickFolder(levelIndex, entry); // 最深栏进入下一级 / 父栏切换分支
+    }, 500);
+  };
+
+  const handleRowDoubleClick = (entry) => {
+    if (clickTimerRef.current) { clearTimeout(clickTimerRef.current); clickTimerRef.current = null; }
+    onOpen(entry.path);
   };
 
   // ---- 定位:打开时锁定一次,之后不随层级增加重算(避免整窗跳动) ----
-  // 可视宽度恒定为两栏:优先锚点右侧,放不下翻左侧,再放不下贴窗口右缘;
+  // 浮窗从锚定文件夹的下方展开,不遮挡所选的文件夹;
+  // 可视宽度恒定为两栏:水平优先锚点右侧,放不下翻左侧,再放不下贴窗口右缘;
+  // 下方空间不足时压缩栏高(内容可滚动),实在放不下(<120px)才翻到锚点上方;
   // 更深的栏靠 wrapper 横向滚动,并自动滚到最新一栏
   const wrapperRef = useRef(null);
   const posRef = useRef(null);
@@ -123,13 +143,20 @@ export default function FolderCascadeMenu({ anchorRect, rootPath, onOpen, onHove
       const flipped = anchorRect.left - 4 - maxW;
       l = flipped >= 8 ? flipped : Math.max(8, window.innerWidth - 8 - maxW);
     }
-    posRef.current = {
-      left: l,
-      top: Math.max(8, Math.min(anchorRect.top, window.innerHeight - COL_MAX_H - 16)),
-      maxW,
-    };
+    const belowT = anchorRect.top + anchorRect.height + 4;
+    const belowAvail = window.innerHeight - 8 - belowT;
+    let t, colH;
+    if (belowAvail >= 120) {
+      t = belowT; // 默认在锚点下方,栏高按可用空间压缩
+      colH = Math.min(COL_MAX_H, belowAvail - 4);
+    } else {
+      const aboveAvail = anchorRect.top - 12;
+      t = Math.max(8, anchorRect.top - 4 - Math.min(COL_MAX_H, aboveAvail));
+      colH = Math.min(COL_MAX_H, Math.max(120, aboveAvail));
+    }
+    posRef.current = { left: l, top: t, maxW, colH };
   }
-  const { left, top, maxW } = posRef.current;
+  const { left, top, maxW, colH } = posRef.current;
 
   const [scrollable, setScrollable] = useState(false);
   useEffect(() => {
@@ -167,7 +194,7 @@ export default function FolderCascadeMenu({ anchorRect, rootPath, onOpen, onHove
           style={{
             width: isExiting ? 0 : COL_W,
             flexShrink: 0,
-            maxHeight: COL_MAX_H,
+            maxHeight: colH,
             marginLeft: i === 0 ? 0 : isExiting ? 0 : 4,
             opacity: isExiting ? 0 : 1,
             overflow: isExiting ? 'hidden' : undefined,
@@ -190,7 +217,7 @@ export default function FolderCascadeMenu({ anchorRect, rootPath, onOpen, onHove
                 <div
                   key={entry.name}
                   onClick={() => handleRowClick(i, entry)}
-                  onDoubleClick={() => onOpen(entry.path)}
+                  onDoubleClick={() => handleRowDoubleClick(entry)}
                   className={`flex items-center gap-2 h-7 px-2 select-none text-[13px] text-fluent-text-primary ${
                     entry.isDirectory ? 'cursor-pointer' : 'cursor-default'
                   } ${isActive ? 'bg-fluent-accent-light' : 'hover:bg-fluent-fill-hover'}`}

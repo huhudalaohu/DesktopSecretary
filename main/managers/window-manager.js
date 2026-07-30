@@ -158,6 +158,7 @@ class WindowManager {
 
     win.on('closed', () => {
       dock.stopMouseTracking();
+      dock.destroyStrip?.();
       console.log('Window closed');
       this.mainWindow = null;
     });
