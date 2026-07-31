@@ -1,5 +1,5 @@
 /**
- * FileNavigator.jsx — 文件导航模块
+ * FileNavigator.jsx — 文件流模块
  *
  * 支持从系统文件资源管理器拖拽文件、文件夹或应用快捷方式建立快捷入口。
  * 提供两种视图：大图标和详细信息列表。
@@ -308,7 +308,7 @@ export default function FileNavigator({ activeWorkspace }) {
     <div onClick={closeContextMenu}>
       {/* 标题栏 + 视图切换 */}
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[15px] font-semibold text-fluent-text-primary">文件导航</span>
+        <span className="font-display text-[15px] font-bold text-fluent-text-primary">文件流</span>
         <div className="flex items-center gap-1">
           <button
             onClick={handleCascadeToggle}

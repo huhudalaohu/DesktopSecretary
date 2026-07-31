@@ -1,6 +1,6 @@
 {
   "name": "desktop-secretary",
-  "version": "1.0.18",
+  "version": "1.0.19",
   "description": "A Windows 11 Fluent design desktop assistant pinned to the right side of your screen",
   "main": "main.js",
   "scripts": {

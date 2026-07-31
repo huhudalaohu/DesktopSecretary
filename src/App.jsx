@@ -321,7 +321,8 @@ export default function App() {
   return (
     <div className="h-full flex flex-col rounded-lg overflow-hidden relative">
       {/* 标题栏 */}
-      <div className="flex items-center justify-end px-4 py-2 drag-region">
+      <div className="flex items-center justify-between px-4 py-2 drag-region">
+        <span className="font-display text-[16px] font-bold tracking-wide text-fluent-text-secondary">聚焦你的心流</span>
         <div className="flex items-center gap-1" data-tour="titlebar-btns">
           <button
             onClick={handleTogglePin}

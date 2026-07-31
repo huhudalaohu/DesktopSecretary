@@ -3,6 +3,9 @@
 /* 1. 正文层：Noto Sans SC（Google Fonts CDN，作 CJK 回退；首选 Segoe UI Variable） */
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap');
 
+/* 展示标题层「霞鹜文楷 Lite」的 @font-face 由 index.html 以 <link> 方式引入(/fonts/lxgw/),
+   不在此 @import:打包后 file:// 协议下绝对路径会解析到磁盘根目录导致加载失败 */
+
 /* 2. 工业铭牌层：D-DIN（本地） */
 @font-face {
   font-family: 'D-DIN';
@@ -69,7 +72,7 @@ html, body, #root {
   overflow: hidden;
   /* 保持透明：Mica 材质需要页面背景透明才能透出 */
   background: transparent;
-  font-family: 'Segoe UI Variable Text', 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  font-family: 'LXGW WenKai Lite', 'Segoe UI Variable Text', 'Segoe UI', 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   color: #1B1B1B;
 }
 
@@ -84,11 +87,17 @@ html, body, #root {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
+  background: transparent;
   border-radius: 3px;
+  transition: background-color 0.2s ease;
 }
 
-::-webkit-scrollbar-thumb:hover {
+/* 滚动时短暂显示滚动条（由 main.jsx 的全局监听加/移 scroll-active 类） */
+.scroll-active::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.scroll-active::-webkit-scrollbar-thumb:hover {
   background: rgba(0, 0, 0, 0.35);
 }
 

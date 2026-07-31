@@ -1,5 +1,5 @@
 /**
- * QuickLinks.jsx — 快速入口（手风琴分组文字链）
+ * QuickLinks.jsx — 链接流（手风琴分组文字链）
  *
  * 5层降级命名流水线（带超时保护）:
  *   0层 - 剪贴板智能分割 / URL 参数解析 → 0秒
@@ -1053,7 +1053,7 @@ export default function QuickLinks({ activeWorkspace }) {
 
   return (
     <div>
-      <div className="text-[15px] font-semibold text-fluent-text-primary mb-2">快速入口</div>
+      <div className="font-display text-[15px] font-bold text-fluent-text-primary mb-2">链接流</div>
 
       <div className="card p-2.5">
         {/* 粘贴链接识别 */}
@@ -1061,7 +1061,7 @@ export default function QuickLinks({ activeWorkspace }) {
           <input
             ref={inputRef}
             type="text"
-            placeholder="粘贴链接，自动识别并命名"
+            placeholder="粘贴链接，自动识别并命名；若文档有权限限制，请手动命名"
             onPaste={handlePaste}
             onKeyDown={handleInputKeydown}
             className="input w-full px-2.5 py-1.5 text-[14px] font-normal"

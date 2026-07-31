@@ -103,7 +103,7 @@ export default function QuickLinkCategorySettings() {
 
   return (
     <section className="card p-2.5 space-y-2">
-      <h3 className="text-[10px] font-semibold text-fluent-text-secondary uppercase tracking-wider">快速入口分类</h3>
+      <h3 className="text-[10px] font-semibold text-fluent-text-secondary uppercase tracking-wider">链接流分类</h3>
       <div className="space-y-1">
         {editableCategories.map((category, index) => (
           <div key={category.id} className="flex items-center gap-1">

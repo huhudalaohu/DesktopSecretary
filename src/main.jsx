@@ -15,6 +15,16 @@ if (import.meta.env.DEV) {
 
 const { default: App } = await import('./App');
 
+// 滚动条自动隐藏:滚动时给滚动容器加 scroll-active 类,停止滚动 700ms 后移除
+const scrollIdleTimers = new WeakMap();
+window.addEventListener('scroll', (e) => {
+  const el = e.target === document ? document.documentElement : e.target;
+  if (!(el instanceof Element)) return;
+  el.classList.add('scroll-active');
+  clearTimeout(scrollIdleTimers.get(el));
+  scrollIdleTimers.set(el, setTimeout(() => el.classList.remove('scroll-active'), 700));
+}, true);
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <ErrorBoundary>

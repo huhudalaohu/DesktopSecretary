@@ -51,12 +51,21 @@ export default {
         'fluent-flyout': '0 8px 16px rgba(0, 0, 0, 0.14)',
       },
       fontFamily: {
+        // 全局正文+标题统一霞鹜文楷,西文/数字回退 Segoe UI 系
         fluent: [
+          "'LXGW WenKai Lite'",
           "'Segoe UI Variable Text'",
           "'Segoe UI'",
           "'Noto Sans SC'",
           "'Microsoft YaHei'",
           'system-ui',
+          'sans-serif',
+        ],
+        // 展示标题层:霞鹜文楷(大标题/模块标题用,正文勿用)
+        display: [
+          "'LXGW WenKai Lite'",
+          "'Segoe UI Variable Text'",
+          "'Noto Sans SC'",
           'sans-serif',
         ],
       },

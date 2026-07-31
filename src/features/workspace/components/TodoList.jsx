@@ -233,6 +233,19 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
   const tooltipTimer = useRef(null);
   const todoTextRefs = useRef(new Map());
   const listRef = useRef(null);
+  const priorityDropdownRef = useRef(null); // 优先级筛选下拉(框外点击收起用)
+
+  // 优先级筛选下拉:打开时监听全局点击,点在框外则收起
+  useEffect(() => {
+    if (priorityFilter !== '_open') return;
+    const onPointerDown = (e) => {
+      if (priorityDropdownRef.current && !priorityDropdownRef.current.contains(e.target)) {
+        setPriorityFilter('all');
+      }
+    };
+    document.addEventListener('mousedown', onPointerDown, true);
+    return () => document.removeEventListener('mousedown', onPointerDown, true);
+  }, [priorityFilter]);
 
   // 加载待办数据（全局，不区分工作区）
   useEffect(() => {
@@ -267,16 +280,23 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
     }
   }, [todos]);
 
-  // 时间轴双击聚焦：滚动到对应待办项
+  // 时间流双击聚焦：滚动到对应待办项
   useEffect(() => {
     if (!focusTodoId) return;
-    const el = document.getElementById(`todo-item-${focusTodoId}`);
-    if (el && listRef.current) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      // 高亮闪烁效果
-      el.classList.add('ring-2', 'ring-fluent-accent');
-      setTimeout(() => el.classList.remove('ring-2', 'ring-fluent-accent'), 1500);
-    }
+    // 目标待办可能被状态/优先级筛选隐藏:先切回「全部」再滚动
+    if (statusFilter !== 'all') setStatusFilter('all');
+    if (priorityFilter !== 'all') setPriorityFilter('all');
+    // 等筛选生效、目标元素渲染出来后再滚动高亮
+    const timer = setTimeout(() => {
+      const el = document.getElementById(`todo-item-${focusTodoId}`);
+      if (el && listRef.current) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // 高亮闪烁效果
+        el.classList.add('ring-2', 'ring-fluent-accent');
+        setTimeout(() => el.classList.remove('ring-2', 'ring-fluent-accent'), 1500);
+      }
+    }, 50);
+    return () => clearTimeout(timer);
   }, [focusTodoId]);
 
   // 保存到 electron-store（保留完整原文，显示层用 CSS 截断）
@@ -461,7 +481,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
         {/* ===== 筛选栏 ===== */}
         <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-1">
-          <span className="text-[15px] font-semibold text-fluent-text-primary mr-1">待办</span>
+          <span className="font-display text-[15px] font-bold text-fluent-text-primary mr-1">事件流</span>
           <ListFilter size={10} className="text-fluent-text-tertiary" />
           {/* 状态筛选 */}
           {statusFilters.map((f) => (
@@ -478,7 +498,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
             </button>
           ))}
           {/* 优先级下拉筛选 */}
-          <div className="relative">
+          <div className="relative" ref={priorityDropdownRef}>
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -496,7 +516,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
               <div className="absolute right-0 top-full mt-1 z-50 bg-fluent-surface-flyout border border-fluent-stroke-card rounded-fluent-lg py-1 shadow-fluent-flyout min-w-[80px]">
                 <button
                   onClick={(e) => { e.stopPropagation(); setPriorityFilter('all'); }}
-                  className="w-full text-left text-[12px] font-normal px-3 py-1.5 text-fluent-text-secondary hover:bg-fluent-fill-hover"
+                  className="w-full text-left text-[12px] font-normal px-3 py-1.5 whitespace-nowrap text-fluent-text-secondary hover:bg-fluent-fill-hover"
                 >
                   全部优先级
                 </button>
@@ -504,7 +524,7 @@ export default function TodoList({ workspaces = [], activeWorkspace, onSwitchWor
                   <button
                     key={key}
                     onClick={(e) => { e.stopPropagation(); setPriorityFilter(key); }}
-                    className="w-full text-left text-[12px] font-normal px-3 py-1.5 text-fluent-text-secondary hover:bg-fluent-fill-hover flex items-center gap-2"
+                    className="w-full text-left text-[12px] font-normal px-3 py-1.5 whitespace-nowrap text-fluent-text-secondary hover:bg-fluent-fill-hover flex items-center gap-2"
                   >
                     <span className={`w-2 h-2 rounded-full ${PRIORITY_CONFIG[key].color}`} />
                     {PRIORITY_CONFIG[key].label}

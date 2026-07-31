@@ -1,4 +1,4 @@
-// AI 助手共享配置(v2:平台垫付,客户端不再保存 apiKey/provider/baseUrl)
+// 智能流共享配置(v2:平台垫付,客户端不再保存 apiKey/provider/baseUrl)
 //
 // 服务端 ai-proxy 云函数根据 mode (fast | precise) 决定调哪个上游模型,
 // 客户端只需要传 mode + messages 即可。

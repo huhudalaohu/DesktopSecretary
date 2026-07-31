@@ -1,5 +1,5 @@
 /**
- * AIAssistant.jsx — AI 助手卡片模块（精简版）
+ * AIAssistant.jsx — 智能流卡片模块（精简版）
  *
  * 功能:
  *   - Token 消耗统计
@@ -45,7 +45,7 @@ export default function AIAssistant({
 
   return (
     <div>
-      <div className="text-[15px] font-semibold text-fluent-text-primary mb-2">AI 助手</div>
+      <div className="font-display text-[15px] font-bold text-fluent-text-primary mb-2">智能流</div>
 
       <div className="card p-3 space-y-3">
         {/* Token 消耗 */}

@@ -205,7 +205,7 @@ export default function Timeline({ activeWorkspace, reminderLevels, onFocusTodo 
     <div className="px-4 mt-[3px] mb-2 select-none" data-tour="timeline">
       {/* 头部：标题（与其他分区一致）+ 视图控制 */}
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[15px] font-semibold text-fluent-text-primary">时间轴</span>
+        <span className="font-display text-[15px] font-bold text-fluent-text-primary">时间流</span>
         <div className="flex items-center gap-2">
           {needsScroll && (
             <span className="text-[10px] font-normal text-fluent-text-tertiary">滚轮查看更多</span>
@@ -229,7 +229,7 @@ export default function Timeline({ activeWorkspace, reminderLevels, onFocusTodo 
         </div>
       </div>
 
-      {/* 时间轴主体（卡片） */}
+      {/* 时间流主体（卡片） */}
       <div className="card p-2.5">
         <div
           className="relative h-6 flex items-center"

@@ -9,13 +9,13 @@ export const DEFAULT_MODULE_VISIBILITY = Object.freeze({
 });
 
 export const MODULE_VISIBILITY_OPTIONS = [
-  { id: 'todos', label: '待办事项' },
+  { id: 'todos', label: '事件流' },
   { id: 'workspaces', label: '工作区' },
-  { id: 'timeline', label: '时间轴' },
-  { id: 'quickLinks', label: '快捷入口' },
-  { id: 'fileNavigator', label: '文件导航' },
-  { id: 'quickNote', label: '随手记' },
-  { id: 'aiAssistant', label: 'AI 助手' },
+  { id: 'timeline', label: '时间流' },
+  { id: 'quickLinks', label: '链接流' },
+  { id: 'fileNavigator', label: '文件流' },
+  { id: 'quickNote', label: '灵感流' },
+  { id: 'aiAssistant', label: '智能流' },
 ];
 
 export function normalizeModuleVisibility(value) {

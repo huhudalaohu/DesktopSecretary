@@ -50,13 +50,13 @@ const STEPS = [
   {
     selector: '[data-tour="timeline"]',
     icon: Clock,
-    title: '时间轴',
+    title: '时间流',
     desc: '每个圆点代表一条带提醒的待办,颜色对应提醒级别。双击圆点可以直接跳转定位到那条待办。',
   },
   {
     selector: '[data-tour="file-nav"]',
     icon: FolderOpen,
-    title: '文件导航',
+    title: '文件流',
     desc: '从资源管理器把文件夹拖进来添加快捷方式,双击直接打开。鼠标悬停文件夹会弹出内容预览:点击文件夹进入下一层,点击左边一栏返回上一层,双击条目直接打开。标题旁的小开关可以关掉这个功能。',
   },
   {
@@ -180,7 +180,7 @@ export default function OnboardingTutorial({ onClose }) {
         {/* 头部:图标 + 标题 + 步骤 + 关闭 */}
         <div className="flex items-center gap-1.5 px-3 pt-2.5 pb-1">
           <Icon size={13} className="text-fluent-accent flex-shrink-0" />
-          <span className="text-[12px] font-semibold text-fluent-text-primary flex-1 truncate">{current.title}</span>
+          <span className="font-display text-[12px] font-bold text-fluent-text-primary flex-1 truncate">{current.title}</span>
           <span className="text-[10px] text-fluent-text-tertiary tabular-nums">{step + 1}/{STEPS.length}</span>
           <button onClick={finish} className="icon-btn" title="关闭教程 (Esc)">
             <X size={12} />
