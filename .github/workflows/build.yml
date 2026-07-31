@@ -98,3 +98,37 @@ jobs:
             release/*.dmg
             release/*.zip
             release/latest-mac.yml
+
+  # ========== 同步产物到腾讯云 COS（自动更新渠道）==========
+  # CI 机器在境外,下载 GitHub 资产无障碍,传 COS 走骨干网,替代本地手动同步
+  # 支持 workflow_dispatch 手动触发:重新同步 package.json 当前版本(已存在的文件自动跳过)
+  sync-cos:
+    name: Sync release assets to Tencent COS
+    needs: build
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync to COS
+        shell: bash
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ "${GITHUB_EVENT_NAME}" != "release" ]; then
+            VERSION=$(node -p "require('./package.json').version")
+          fi
+          echo "同步版本: $VERSION"
+          node scripts/build/sync-from-github-to-cos.js --version="$VERSION"
