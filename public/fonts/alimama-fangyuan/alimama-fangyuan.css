@@ -1,0 +1,8 @@
+/* 阿里妈妈方圆体 VF —— 可变字体,字重轴 wght 200–700,单个文件连续可调 */
+@font-face {
+  font-family: 'AlimamaFangYuan';
+  font-style: normal;
+  font-weight: 200 700;
+  font-display: swap;
+  src: url('./AlimamaFangYuanTiVF.woff2') format('woff2');
+}

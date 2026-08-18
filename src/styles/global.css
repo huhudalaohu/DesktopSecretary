@@ -101,6 +101,28 @@ html, body, #root {
   background: rgba(0, 0, 0, 0.35);
 }
 
+/* 第二字体 阿里妈妈方圆体 VF:设置里切换「界面字体」,根容器加 font-modern 即整体生效 */
+.font-modern,
+.font-modern .font-display {
+  font-family: 'AlimamaFangYuan', 'Segoe UI Variable Text', 'Segoe UI', 'Noto Sans SC', 'Microsoft YaHei', system-ui, sans-serif;
+}
+
+/* 字体粗细调节:根容器 --fw 为正文基准字重,标题档在其上递进(可变字体下连续生效;
+   文楷等静态字重会自动就近匹配已有字模) */
+.app-root {
+  font-weight: var(--fw, 400);
+}
+.app-root .font-medium {
+  font-weight: calc(var(--fw, 400) + 100);
+}
+.app-root .font-semibold {
+  font-weight: calc(var(--fw, 400) + 200);
+}
+.app-root .font-bold,
+.app-root .font-display {
+  font-weight: calc(var(--fw, 400) + 300);
+}
+
 /* 防止文字被选中（桌面组件体验），输入框/可编辑区域恢复默认 */
 * {
   user-select: none;

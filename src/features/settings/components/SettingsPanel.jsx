@@ -26,6 +26,10 @@ export default function SettingsPanel({
   panelRef,
   fontScale,
   setFontScale,
+  fontChoice,
+  fontWeight,
+  setFontWeight,
+  setFontChoice,
   aiSettings,
   setAiSettings,
   editingShortcut,
@@ -83,7 +87,7 @@ export default function SettingsPanel({
     <div
       ref={panelRef}
       style={{ zoom: 1 / fontScale }}
-      className="card mx-4 mb-2 h-[50vh] p-2.5 overflow-hidden flex flex-col"
+      className="card mx-4 mt-3 mb-2 max-h-[calc(100vh-88px)] p-2.5 overflow-hidden flex flex-col shrink-0"
     >
       {/* 设置标题 */}
       <div className="flex items-center justify-between px-1 pb-2 shrink-0">
@@ -91,8 +95,8 @@ export default function SettingsPanel({
         <span className="text-[9px] text-fluent-text-tertiary">Desktop Secretary</span>
       </div>
 
-      <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 flex-1 min-h-0">
-        <nav aria-label="设置分类" className="rounded-fluent-lg bg-fluent-fill-subtle border border-fluent-stroke-card p-1 space-y-0.5">
+      <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 min-h-0 max-h-[calc(100vh-132px)] overflow-hidden">
+        <nav aria-label="设置分类" className="rounded-fluent-lg bg-fluent-fill-subtle border border-fluent-stroke-card p-1 space-y-0.5 overflow-y-auto">
           {SETTINGS_CATEGORIES.map(({ id, label, Icon }) => {
             const active = activeCategory === id;
             return (
@@ -163,6 +167,56 @@ export default function SettingsPanel({
             ))}
           </div>
         </div>
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-fluent-text-secondary">界面字体</span>
+          <div className="flex gap-1">
+            {[
+              { label: '文楷', value: 'wenkai' },
+              { label: '方圆体', value: 'modern' },
+            ].map((opt) => (
+              <button
+                key={opt.value}
+                onClick={async () => {
+                  setFontChoice(opt.value);
+                  await api.storeSet('fontChoice', opt.value);
+                }}
+                className={`px-2 py-0.5 rounded-fluent text-[10px] transition-colors ${
+                  fontChoice === opt.value
+                    ? 'bg-fluent-accent-light text-fluent-accent'
+                    : 'text-fluent-text-secondary hover:bg-fluent-fill-hover'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] text-fluent-text-secondary">字体粗细</span>
+          <div className="flex gap-1">
+            {[
+              { label: '细体', value: '300' },
+              { label: '标准', value: '400' },
+              { label: '粗体', value: '500' },
+              { label: '特粗', value: '600' },
+            ].map((opt) => (
+              <button
+                key={opt.value}
+                onClick={async () => {
+                  setFontWeight(opt.value);
+                  await api.storeSet('fontWeight', opt.value);
+                }}
+                className={`px-2 py-0.5 rounded-fluent text-[10px] transition-colors ${
+                  fontWeight === opt.value
+                    ? 'bg-fluent-accent-light text-fluent-accent'
+                    : 'text-fluent-text-secondary hover:bg-fluent-fill-hover'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
       </section>
 
       {/* ===== 模块显示 ===== */}
@@ -198,7 +252,7 @@ export default function SettingsPanel({
 
           <div className={activeCategory === 'account' ? 'space-y-3' : 'hidden'}>
             <SyncPanel />
-            <CreditsPanel onOpenRecharge={onOpenRecharge} />
+            {activeCategory === 'account' && <CreditsPanel onOpenRecharge={onOpenRecharge} />}
           </div>
 
           <div className={activeCategory === 'ai' ? 'space-y-3' : 'hidden'}>

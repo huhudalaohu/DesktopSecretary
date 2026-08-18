@@ -41,6 +41,8 @@ export default function App() {
   const [snapHintEdge, setSnapHintEdge] = useState(null);
   const [reminderLevels, setReminderLevels] = useState(DEFAULT_REMINDER_LEVELS);
   const [moduleVisibility, setModuleVisibility] = useState(DEFAULT_MODULE_VISIBILITY);
+  const [fontChoice, setFontChoice] = useState('wenkai'); // 界面字体: wenkai 霞鹜文楷 | modern 阿里妈妈方圆体
+  const [fontWeight, setFontWeight] = useState('400'); // 字体粗细基准: 300 细 | 400 标准 | 500 粗 | 600 特粗
 
   // 数据管理
   const [dataStats, setDataStats] = useState(null);
@@ -239,6 +241,13 @@ export default function App() {
       settings.setFontScale(scale);
     });
 
+    api.storeGet('fontChoice', 'wenkai').then((saved) => {
+      setFontChoice(saved === 'modern' ? 'modern' : 'wenkai');
+    });
+    api.storeGet('fontWeight', '400').then((saved) => {
+      setFontWeight(['300', '400', '500', '600'].includes(saved) ? saved : '400');
+    });
+
     api.storeGet('moduleVisibility', DEFAULT_MODULE_VISIBILITY).then((saved) => {
       setModuleVisibility(normalizeModuleVisibility(saved));
     });
@@ -313,13 +322,50 @@ export default function App() {
     return cleanup;
   }, [handleTogglePin]);
 
+  useEffect(() => {
+    const handleWorkspaceTab = (event) => {
+      if (
+        event.defaultPrevented ||
+        event.key !== 'Tab' ||
+        event.repeat ||
+        !docked ||
+        settings.showSettings ||
+        rechargeOpen ||
+        workspaces.length < 2 ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.metaKey
+      ) {
+        return;
+      }
+
+      const target = event.target;
+      if (target instanceof Element && target.closest('input, textarea, select, button, a, [contenteditable="true"], [role="textbox"]')) {
+        return;
+      }
+
+      event.preventDefault();
+      setActiveWorkspace((current) => {
+        const currentIndex = workspaces.findIndex((workspace) => workspace.id === current);
+        const direction = event.shiftKey ? -1 : 1;
+        const nextIndex = currentIndex < 0
+          ? 0
+          : (currentIndex + direction + workspaces.length) % workspaces.length;
+        return workspaces[nextIndex].id;
+      });
+    };
+
+    window.addEventListener('keydown', handleWorkspaceTab);
+    return () => window.removeEventListener('keydown', handleWorkspaceTab);
+  }, [docked, workspaces, settings.showSettings, rechargeOpen]);
+
   // ========== DnD ==========
   const dndSensors = useSensors(
     useSensor(SmartPointerSensor, { activationConstraint: { distance: 5 } })
   );
 
   return (
-    <div className="h-full flex flex-col rounded-lg overflow-hidden relative">
+    <div className={`app-root h-full flex flex-col rounded-lg overflow-hidden relative ${fontChoice === 'modern' ? 'font-modern' : ''}`} style={{ '--fw': fontWeight }}>
       {/* 标题栏 */}
       <div className="flex items-center justify-between px-4 py-2 drag-region">
         <span className="font-display text-[16px] font-bold tracking-wide text-fluent-text-secondary">聚焦你的心流</span>
@@ -442,6 +488,10 @@ export default function App() {
             panelRef={settings.settingsPanelRef}
             fontScale={settings.fontScale}
             setFontScale={settings.setFontScale}
+            fontChoice={fontChoice}
+            setFontChoice={setFontChoice}
+            fontWeight={fontWeight}
+            setFontWeight={setFontWeight}
             aiSettings={settings.aiSettings}
             setAiSettings={settings.setAiSettings}
             editingShortcut={settings.editingShortcut}

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { Coins, RotateCw, Plus, AlertCircle } from 'lucide-react';
 import { fetchBalance, CallAIError } from '../../services/ai-proxy';
 import { getCurrentUser, onLoginStateChanged } from '../../services/cloudbase';
@@ -41,6 +41,15 @@ function describeTransaction(t) {
   }
 }
 
+const INITIAL_LOAD_RETRY_DELAYS = [1500, 3000];
+
+function getBalanceErrorMessage(err) {
+  if (err instanceof CallAIError && err.code === 'NOT_LOGGED_IN') {
+    return '请先登录';
+  }
+  return err?.message || '获取失败';
+}
+
 export default function CreditsPanel({ onOpenRecharge }) {
   const [user, setUser] = useState(() => getCurrentUser());
   const [loading, setLoading] = useState(false);
@@ -49,46 +58,92 @@ export default function CreditsPanel({ onOpenRecharge }) {
   const [totalRecharged, setTotalRecharged] = useState(0);
   const [totalConsumed, setTotalConsumed] = useState(0);
   const [transactions, setTransactions] = useState([]);
+  const retryTimerRef = useRef(null);
+  const requestIdRef = useRef(0);
+
+  const clearPendingRetry = useCallback(() => {
+    if (retryTimerRef.current) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+  }, []);
+
+  const applyBalance = useCallback((result) => {
+    setBalance(result.balance);
+    setTotalRecharged(result.totalRecharged);
+    setTotalConsumed(result.totalConsumed);
+    setTransactions(result.recentTransactions || []);
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!getCurrentUser()) return;
+    const requestId = ++requestIdRef.current;
+    clearPendingRetry();
     setLoading(true);
     setError(null);
     try {
       const r = await fetchBalance();
-      setBalance(r.balance);
-      setTotalRecharged(r.totalRecharged);
-      setTotalConsumed(r.totalConsumed);
-      setTransactions(r.recentTransactions || []);
+      if (requestId === requestIdRef.current) applyBalance(r);
     } catch (err) {
-      if (err instanceof CallAIError && err.code === 'NOT_LOGGED_IN') {
-        setError('请先登录');
-      } else {
-        setError(err.message || '获取失败');
-      }
+      if (requestId === requestIdRef.current) setError(getBalanceErrorMessage(err));
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
-  }, []);
+  }, [applyBalance, clearPendingRetry]);
+
+  const refreshAfterInitialization = useCallback(() => {
+    if (!getCurrentUser()) return;
+    const requestId = ++requestIdRef.current;
+    clearPendingRetry();
+    setLoading(true);
+    setError(null);
+
+    const attempt = async (attemptIndex) => {
+      try {
+        const r = await fetchBalance();
+        if (requestId !== requestIdRef.current) return;
+        applyBalance(r);
+        setLoading(false);
+      } catch (err) {
+        if (requestId !== requestIdRef.current) return;
+        const retryDelay = INITIAL_LOAD_RETRY_DELAYS[attemptIndex];
+        if (retryDelay) {
+          retryTimerRef.current = window.setTimeout(() => {
+            retryTimerRef.current = null;
+            attempt(attemptIndex + 1);
+          }, retryDelay);
+          return;
+        }
+        setLoading(false);
+        setError('暂时未获取到积分余额，请稍后点击刷新');
+      }
+    };
+
+    attempt(0);
+  }, [applyBalance, clearPendingRetry]);
 
   // 登录态变化时刷新
   useEffect(() => {
     const cleanup = onLoginStateChanged((state) => {
       const u = state?.user || (typeof state?.uid === 'string' ? state : null);
       setUser(u);
-      if (u && u.uid) refresh();
+      if (u && u.uid) refreshAfterInitialization();
       else {
+        ++requestIdRef.current;
+        clearPendingRetry();
+        setLoading(false);
+        setError(null);
         setBalance(null);
         setTransactions([]);
       }
     });
-    return () => cleanup?.();
-  }, [refresh]);
-
-  // 初次进入若已登录,拉一次
-  useEffect(() => {
-    if (getCurrentUser()) refresh();
-  }, [refresh]);
+    if (getCurrentUser()) refreshAfterInitialization();
+    return () => {
+      ++requestIdRef.current;
+      clearPendingRetry();
+      cleanup?.();
+    };
+  }, [clearPendingRetry, refreshAfterInitialization]);
 
   // 监听 ai-proxy 广播的余额变化,本地直接更新无需 re-fetch
   // 同时支持 detail 为空的"强制刷新"信号(用于注册/登录成功后兜底)
@@ -101,12 +156,12 @@ export default function CreditsPanel({ onOpenRecharge }) {
         if (typeof used === 'number') setTotalConsumed((v) => v + used);
       } else {
         // 没带 balance:重新拉一次(注册刚成功 + 错误态时尤其有用)
-        refresh();
+        refreshAfterInitialization();
       }
     };
     window.addEventListener('credits-updated', onCreditsUpdated);
     return () => window.removeEventListener('credits-updated', onCreditsUpdated);
-  }, [refresh]);
+  }, [refreshAfterInitialization]);
 
   // 未登录态: 提示去登录(SyncPanel 在上方,用户能直接看到)
   if (!user || !user.uid) {
