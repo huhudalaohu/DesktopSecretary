@@ -204,7 +204,12 @@ async function main() {
 
   // ========== 自动检测平台 ==========
   const hasWin = files.some((f) => f.endsWith('.exe') && f.includes(version)) || files.includes('latest.yml');
-  const hasMac = files.some((f) => f.endsWith('.dmg') && f.includes(version)) || files.includes('latest-mac.yml');
+  const hasMacArtifacts = files.some((f) => f.endsWith('.dmg') && f.includes(version));
+  const hasMac = hasMacArtifacts && files.includes('latest-mac.yml');
+
+  if (hasMacArtifacts && !hasMac) {
+    throw new Error(`检测到 macOS ${version} 安装包，但缺少 latest-mac.yml`);
+  }
 
   if (!hasWin && !hasMac) {
     throw new Error(`在 ${distPath} 下未找到任何构建产物，请先运行 npm run dist`);
