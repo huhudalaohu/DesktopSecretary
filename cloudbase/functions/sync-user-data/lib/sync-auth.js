@@ -7,6 +7,8 @@ const { fail } = require('./response');
 
 const cache = {};
 const CACHE_TTL = 60 * 60 * 1000;
+const ENV_ID = 'ds-dev-d9g28xlrgd2600837';
+const EXPECTED_ISSUER = `https://${ENV_ID}.ap-shanghai.tcb-api.tencentcloudapi.com`;
 
 class AuthError extends Error {
   constructor(message) {
@@ -95,6 +97,9 @@ async function requireAuth(event) {
   }
   if (header.alg !== 'RS256' || !header.kid || !payload.iss || !payload.sub) {
     throw new AuthError('登录凭证无效');
+  }
+  if (payload.iss !== EXPECTED_ISSUER || payload.aud !== ENV_ID || payload.project_id !== ENV_ID) {
+    throw new AuthError('登录凭证签发方无效');
   }
   if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
     throw new AuthError('登录状态已过期，请重新登录');
