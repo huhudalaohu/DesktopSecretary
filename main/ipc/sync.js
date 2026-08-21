@@ -43,7 +43,18 @@ function registerSyncIpcHandlers({ getAuth, getEngine }) {
           // 应用重启后 renderer SDK 才能续期 token。令牌首次就绪时再拉取，
           // 后续刷新 token 不重复切换 profile，避免覆盖正在编辑的本地数据。
           if (!hadAccessToken && auth.hasAccessToken()) {
-            engine.pull().catch((err) => console.error('[Sync] 登录态恢复 Pull 失败:', err.message));
+            const hasAnonymousData = engine.profile.hasAnonymousData();
+            engine.pull()
+              .then(async (pullResult) => {
+                if (!pullResult.success || !hasAnonymousData) return;
+                const mergeResult = engine.profile.mergeAnonymousIntoActive();
+                if (!mergeResult.merged) return;
+                const pushResult = await engine.push();
+                if (!pushResult.success) {
+                  console.error('[Sync] 恢复匿名数据上传失败:', pushResult.error);
+                }
+              })
+              .catch((err) => console.error('[Sync] 登录态恢复 Pull 失败:', err.message));
           }
         } else if (opts.isNewUser) {
           if (opts.importLocalData) {

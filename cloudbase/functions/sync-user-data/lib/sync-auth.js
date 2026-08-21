@@ -70,7 +70,12 @@ async function getKeys(issuer) {
   }
   const keys = {};
   (jwks.keys || []).forEach((jwk) => {
-    if (jwk && jwk.kid) keys[jwk.kid] = jwkToPem(jwk);
+    if (!jwk || !jwk.kid) return;
+    try {
+      keys[jwk.kid] = jwkToPem(jwk);
+    } catch (err) {
+      throw new AuthError(`登录凭证公钥转换失败: ${err.message}`);
+    }
   });
   cache[issuer] = { at: Date.now(), keys };
   return keys;
@@ -108,12 +113,15 @@ async function requireAuth(event) {
   const keys = await getKeys(payload.iss);
   const pem = keys[header.kid];
   if (!pem) throw new AuthError('登录凭证签名密钥无效');
-  const verified = crypto.verify(
-    'RSA-SHA256',
-    Buffer.from(`${parts[0]}.${parts[1]}`),
-    pem,
-    decode(parts[2])
-  );
+  let verified;
+  try {
+    const verifier = crypto.createVerify('RSA-SHA256');
+    verifier.update(`${parts[0]}.${parts[1]}`, 'utf8');
+    verifier.end();
+    verified = verifier.verify(pem, decode(parts[2]));
+  } catch (err) {
+    throw new AuthError(`登录凭证验签失败: ${err.message}`);
+  }
   if (!verified) throw new AuthError('登录凭证签名无效');
   return { uid: payload.sub };
 }
