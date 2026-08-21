@@ -107,6 +107,12 @@ html, body, #root {
   font-family: 'AlimamaFangYuan', 'Segoe UI Variable Text', 'Segoe UI', 'Noto Sans SC', 'Microsoft YaHei', system-ui, sans-serif;
 }
 
+/* 系统默认字体：优先使用 Windows 常见的微软雅黑，未安装时回退到系统 UI 字体 */
+.font-system,
+.font-system .font-display {
+  font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', 'Segoe UI Variable Text', 'Segoe UI', 'Noto Sans SC', system-ui, sans-serif;
+}
+
 /* 字体粗细调节:根容器 --fw 为正文基准字重,标题档在其上递进(可变字体下连续生效;
    文楷等静态字重会自动就近匹配已有字模) */
 .app-root {

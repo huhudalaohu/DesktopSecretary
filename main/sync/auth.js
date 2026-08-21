@@ -17,6 +17,7 @@ class AuthManager {
   constructor(store) {
     this.store = store;
     this.session = null;
+    this.accessToken = null;
     this._loadSession();
   }
 
@@ -43,13 +44,16 @@ class AuthManager {
   /**
    * 渲染进程登录后调用,把 uid 持久化。
    */
-  setSession({ uid, username }) {
+  setSession({ uid, username, accessToken }) {
     if (!uid) throw new Error('uid 不能为空');
     this.session = {
       uid,
       username: username || '',
       loginAt: Date.now(),
     };
+    // AccessToken 只留在内存中。它由渲染进程的 CloudBase SDK 自动续期，
+    // 不应该写入 electron-store 或随用户数据同步。
+    if (accessToken) this.accessToken = accessToken;
     this._saveSession();
     console.log('[Sync] 已绑定用户:', this.session.username || uid);
     return { success: true, uid, username: this.session.username };
@@ -57,6 +61,7 @@ class AuthManager {
 
   clearSession() {
     this.session = null;
+    this.accessToken = null;
     this._saveSession();
     console.log('[Sync] 已清除会话');
     return { success: true };
@@ -70,6 +75,14 @@ class AuthManager {
       username: this.session.username || '',
       loginAt: this.session.loginAt,
     };
+  }
+
+  hasAccessToken() {
+    return Boolean(this.accessToken);
+  }
+
+  getAccessToken() {
+    return this.accessToken;
   }
 }
 

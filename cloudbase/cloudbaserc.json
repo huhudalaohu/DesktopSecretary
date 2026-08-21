@@ -1,0 +1,13 @@
+{
+  "envId": "ds-dev-d9g28xlrgd2600837",
+  "functionRoot": "./functions",
+  "functions": [
+    {
+      "name": "sync-user-data",
+      "runtime": "Nodejs8.9",
+      "timeout": 15,
+      "memorySize": 256,
+      "handler": "index.main"
+    }
+  ]
+}

@@ -87,7 +87,7 @@ export default function SettingsPanel({
     <div
       ref={panelRef}
       style={{ zoom: 1 / fontScale }}
-      className="card mx-4 mt-3 mb-2 max-h-[calc(100vh-88px)] p-2.5 overflow-hidden flex flex-col shrink-0"
+      className="card mx-4 mt-3 mb-2 h-[60vh] max-h-[560px] min-h-[260px] p-2.5 overflow-hidden flex flex-col shrink-0"
     >
       {/* 设置标题 */}
       <div className="flex items-center justify-between px-1 pb-2 shrink-0">
@@ -95,8 +95,8 @@ export default function SettingsPanel({
         <span className="text-[9px] text-fluent-text-tertiary">Desktop Secretary</span>
       </div>
 
-      <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 min-h-0 max-h-[calc(100vh-132px)] overflow-hidden">
-        <nav aria-label="设置分类" className="rounded-fluent-lg bg-fluent-fill-subtle border border-fluent-stroke-card p-1 space-y-0.5 overflow-y-auto">
+      <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2 flex-1 min-h-0 overflow-hidden">
+        <nav aria-label="设置分类" className="min-h-0 rounded-fluent-lg bg-fluent-fill-subtle border border-fluent-stroke-card p-1 space-y-0.5 overflow-y-auto overscroll-contain">
           {SETTINGS_CATEGORIES.map(({ id, label, Icon }) => {
             const active = activeCategory === id;
             return (
@@ -117,7 +117,7 @@ export default function SettingsPanel({
           })}
         </nav>
 
-        <div className="min-w-0 overflow-y-auto pr-0.5 space-y-3">
+        <div className="min-w-0 min-h-0 h-full overflow-y-auto overscroll-contain pr-0.5 space-y-3">
 
           <div className={activeCategory === 'general' ? 'space-y-3' : 'hidden'}>
       {/* ===== 通用设置 ===== */}
@@ -171,6 +171,7 @@ export default function SettingsPanel({
           <span className="text-[10px] text-fluent-text-secondary">界面字体</span>
           <div className="flex gap-1">
             {[
+              { label: '系统默认', value: 'system' },
               { label: '文楷', value: 'wenkai' },
               { label: '方圆体', value: 'modern' },
             ].map((opt) => (

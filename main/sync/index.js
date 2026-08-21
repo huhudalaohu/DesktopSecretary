@@ -14,15 +14,10 @@ let authManager = null;
 let syncEngine = null;
 let initialized = false;
 
-function initSync(store, tcbApp) {
+function initSync(store) {
   if (initialized) {
     console.warn('[Sync] 已初始化，跳过');
     return { auth: authManager, engine: syncEngine };
-  }
-
-  if (!tcbApp) {
-    console.warn('[Sync] CloudBase 未初始化，同步功能不可用');
-    return null;
   }
 
   if (!store) {
@@ -31,8 +26,8 @@ function initSync(store, tcbApp) {
   }
 
   try {
-    const cloudStore = new CloudStore(tcbApp);
     authManager = new AuthManager(store);
+    const cloudStore = new CloudStore(authManager);
     syncEngine = new SyncEngine(store, cloudStore, authManager);
     initialized = true;
 
@@ -45,12 +40,10 @@ function initSync(store, tcbApp) {
         syncEngine.profile.bindCurrentDataToProfile(status.uid);
       }
       syncEngine.profile.activeUid = status.uid;
+      syncEngine.restoreLastSync(status.uid);
 
-      setTimeout(() => {
-        syncEngine.pull().catch((err) => {
-          console.error('[Sync] 启动自动拉取失败:', err.message);
-        });
-      }, 3000);
+      // 重启后的 AccessToken 只由渲染进程 SDK 续期，令牌就绪时会经
+      // auth:setUid 触发首次拉取，避免启动阶段产生无意义的失败日志。
     } else {
       // 未登录时,活跃 profile 设为 anonymous
       syncEngine.profile.activeUid = 'anonymous';

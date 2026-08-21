@@ -47,7 +47,17 @@ function main() {
 
   // 历史上 _shared 的 credits-init.js 曾是 doc DB 版、ai-proxy 自带 MySQL 版,
   // 需要按函数排除;2026-07 起 _shared 统一为 MySQL 版,全员共用,不再排除。
-  const EXCLUDE_BY_FUNCTION = {};
+  // sync-user-data 运行在体验版仅支持的 Node.js 8.9 上，使用自己的
+  // Node 8 兼容响应与 JWT 验证实现，不能被通用库覆盖。
+  const EXCLUDE_BY_FUNCTION = {
+    'sync-user-data': [
+      'auth-helper.js',
+      'config-cache.js',
+      'credits-init.js',
+      'mysql.js',
+      'response.js',
+    ],
+  };
 
   let total = 0;
   for (const fn of functions) {

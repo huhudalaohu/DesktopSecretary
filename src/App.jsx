@@ -41,7 +41,7 @@ export default function App() {
   const [snapHintEdge, setSnapHintEdge] = useState(null);
   const [reminderLevels, setReminderLevels] = useState(DEFAULT_REMINDER_LEVELS);
   const [moduleVisibility, setModuleVisibility] = useState(DEFAULT_MODULE_VISIBILITY);
-  const [fontChoice, setFontChoice] = useState('wenkai'); // 界面字体: wenkai 霞鹜文楷 | modern 阿里妈妈方圆体
+  const [fontChoice, setFontChoice] = useState('wenkai'); // 界面字体: system 系统默认 | wenkai 霞鹜文楷 | modern 阿里妈妈方圆体
   const [fontWeight, setFontWeight] = useState('400'); // 字体粗细基准: 300 细 | 400 标准 | 500 粗 | 600 特粗
 
   // 数据管理
@@ -242,7 +242,7 @@ export default function App() {
     });
 
     api.storeGet('fontChoice', 'wenkai').then((saved) => {
-      setFontChoice(saved === 'modern' ? 'modern' : 'wenkai');
+      setFontChoice(['system', 'modern', 'wenkai'].includes(saved) ? saved : 'wenkai');
     });
     api.storeGet('fontWeight', '400').then((saved) => {
       setFontWeight(['300', '400', '500', '600'].includes(saved) ? saved : '400');
@@ -365,7 +365,9 @@ export default function App() {
   );
 
   return (
-    <div className={`app-root h-full flex flex-col rounded-lg overflow-hidden relative ${fontChoice === 'modern' ? 'font-modern' : ''}`} style={{ '--fw': fontWeight }}>
+    <div className={`app-root h-full flex flex-col rounded-lg overflow-hidden relative ${
+      fontChoice === 'modern' ? 'font-modern' : fontChoice === 'system' ? 'font-system' : ''
+    }`} style={{ '--fw': fontWeight }}>
       {/* 标题栏 */}
       <div className="flex items-center justify-between px-4 py-2 drag-region">
         <span className="font-display text-[16px] font-bold tracking-wide text-fluent-text-secondary">聚焦你的心流</span>

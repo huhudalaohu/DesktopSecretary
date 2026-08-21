@@ -19,6 +19,7 @@ scripts/ops/
 
 # CloudBase CLI 配置(含敏感信息)
 cloudbaserc.json
+!cloudbase/cloudbaserc.json
 
 # 部署产物/密钥备忘
 *-deploy.zip

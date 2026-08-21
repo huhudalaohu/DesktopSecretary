@@ -6,6 +6,7 @@
 const { BrowserWindow } = require('electron');
 const { SYNC_KEYS, DYNC_KEY_PREFIXES, SYNC_DEBOUNCE_MS } = require('./constants');
 const { ProfileManager } = require('./profile');
+const { SyncAuditLog } = require('./audit-log');
 
 class SyncEngine {
   constructor(store, cloudStore, authManager) {
@@ -13,6 +14,7 @@ class SyncEngine {
     this.cloud = cloudStore;
     this.auth = authManager;
     this.profile = new ProfileManager(store);
+    this.auditLog = new SyncAuditLog();
     this.pushTimer = null;
     this.isPushing = false;
     this.isPulling = false;
@@ -94,6 +96,23 @@ class SyncEngine {
     return `${os.hostname()}_${os.userInfo().username}`;
   }
 
+  _lastSyncStorageKey(uid) {
+    return uid ? `syncLastSyncAt:${uid}` : null;
+  }
+
+  restoreLastSync(uid) {
+    const key = this._lastSyncStorageKey(uid);
+    const timestamp = key ? Number(this.store.get(key, 0)) : 0;
+    this.lastSyncAt = Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null;
+    return this.lastSyncAt;
+  }
+
+  _recordSync(timestamp = Date.now()) {
+    this.lastSyncAt = timestamp;
+    const key = this._lastSyncStorageKey(this.auth.getStatus().uid);
+    if (key) this.store.set(key, timestamp);
+  }
+
   /**
    * 将云端数据应用到本地 store
    */
@@ -124,8 +143,8 @@ class SyncEngine {
 
     const currentUid = this.profile.activeUid;
 
-    // 1. 归档当前数据（匿名状态不需要归档，数据已在顶层）
-    if (currentUid && currentUid !== 'anonymous') {
+    // 1. 归档当前数据（匿名数据也必须归档，切换账户时才不会丢失）
+    if (currentUid) {
       this.profile.archiveProfile(currentUid);
     }
 
@@ -139,6 +158,7 @@ class SyncEngine {
     }
 
     this.profile.activeUid = uid || 'anonymous';
+    this.restoreLastSync(this.profile.activeUid);
     this.isSwitchingProfile = false;
 
     // 4. 通知 renderer（使用独立的 IPC 通道）
@@ -169,15 +189,17 @@ class SyncEngine {
       const packed = this._packData();
       packed._meta = { ownerUid: status.uid, ownerEmail: status.username };
       await this.cloud.setUserData(status.uid, packed);
-      this.lastSyncAt = Date.now();
+      this._recordSync();
       this.dirty = false;
       console.log('[Sync] Push 成功');
       const result = { success: true, direction: 'push', timestamp: this.lastSyncAt };
+      this.auditLog.write({ operation: 'push', success: true, timestamp: this.lastSyncAt });
       this._notifyRenderer({ ...result, isSyncing: false });
       return result;
     } catch (err) {
       console.error('[Sync] Push 失败:', err.message);
       const result = { success: false, error: err.message };
+      this.auditLog.write({ operation: 'push', success: false, error: err.message });
       this._notifyRenderer({ ...result, isSyncing: false });
       return result;
     } finally {
@@ -203,21 +225,25 @@ class SyncEngine {
       const doc = await this.cloud.getUserData(status.uid);
       if (!doc) {
         console.log('[Sync] 云端无数据，跳过 Pull');
+        this._recordSync();
         const result = { success: true, direction: 'none', message: '云端无数据' };
+        this.auditLog.write({ operation: 'pull', success: true, direction: 'none' });
         this._notifyRenderer({ ...result, isSyncing: false });
         return result;
       }
 
       const result = this._applyData(doc);
-      this.lastSyncAt = Date.now();
+      this._recordSync();
       this.dirty = false;
       console.log('[Sync] Pull 成功，写入', result.count, '个 key');
       const ret = { success: true, direction: 'pull', timestamp: this.lastSyncAt, count: result.count };
+      this.auditLog.write({ operation: 'pull', success: true, count: result.count, timestamp: this.lastSyncAt });
       this._notifyRenderer({ ...ret, isSyncing: false });
       return ret;
     } catch (err) {
       console.error('[Sync] Pull 失败:', err.message);
       const result = { success: false, error: err.message };
+      this.auditLog.write({ operation: 'pull', success: false, error: err.message });
       this._notifyRenderer({ ...result, isSyncing: false });
       return result;
     } finally {
@@ -235,16 +261,11 @@ class SyncEngine {
     }
 
     const doc = await this.cloud.getUserData(status.uid);
-    const localPacked = this._packData();
-    const localTime = localPacked.updatedAt;
-    const cloudTime = doc ? (doc.updatedAt || 0) : 0;
-
-    if (!doc || cloudTime < localTime || this.dirty) {
+    if (!doc || this.dirty) {
       return await this.push();
-    } else if (cloudTime > localTime) {
-      return await this.pull();
     } else {
-      return { success: true, direction: 'none', message: '数据一致' };
+      // 未检测到本地改动时以云端为准，避免每次手动同步都用当前时间覆盖云端。
+      return await this.pull();
     }
   }
 

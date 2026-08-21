@@ -22,7 +22,7 @@ class ProfileManager {
    * 将当前顶层数据归档到指定 uid
    */
   archiveProfile(uid) {
-    if (!uid || uid === 'anonymous') return;
+    if (!uid) return;
 
     for (const key of SYNC_KEYS) {
       try {
@@ -56,7 +56,7 @@ class ProfileManager {
    */
   loadProfile(uid) {
     this.clearActiveKeys();
-    if (!uid || uid === 'anonymous') return;
+    if (!uid) return;
 
     for (const key of SYNC_KEYS) {
       try {

@@ -54,6 +54,8 @@ export default function SyncPanel() {
       const main = await api.syncGetStatus();
       const sdkUser = getCurrentUser();
       const loggedIn = (main && main.isLoggedIn) || !!sdkUser;
+      setSyncing(Boolean(main?.isSyncing));
+      setLastSync(main?.lastSyncAt || null);
 
       // 防御:hasLoginState 显示已登录,但 accessToken 拿不到(SDK session 残缺,
       // 通常是上一次安装的残留)。这种情况下 fetchBalance 一定 401,会显示"请先
@@ -67,14 +69,23 @@ export default function SyncPanel() {
           setStatus({ isLoggedIn: false });
           return;
         }
+
+        // 主进程的同步令牌只保存在内存中。应用重启后这里会重新提供 SDK
+        // 自动续期的 token，从而恢复云端拉取。
+        if (sdkUser?.uid) {
+          api.authSetUid(sdkUser.uid, {
+            username: sdkUser.email || '',
+            isNewUser: false,
+            accessToken: token.accessToken,
+          }).catch((err) => console.warn('[SyncPanel] 恢复同步令牌失败:', err));
+        }
       }
 
       if (main && main.isLoggedIn) {
         setStatus({ isLoggedIn: true, username: main.username || sdkUser?.email || '' });
       } else if (sdkUser) {
-        // SDK 有但主进程没绑:补一下
+        // 上面的 token 校验与 authSetUid 已经完成主进程绑定。
         setStatus({ isLoggedIn: true, username: sdkUser.email || '' });
-        api.authSetUid(sdkUser.uid, { username: sdkUser.email || '', isNewUser: false }).catch(() => {});
       } else {
         setStatus({ isLoggedIn: false });
       }
@@ -87,7 +98,7 @@ export default function SyncPanel() {
     loadStatus();
     const cleanupSync = api.onSyncStatusChange?.((data) => {
       setSyncing(data.isSyncing);
-      if (data.success && (data.direction === 'push' || data.direction === 'pull')) {
+      if (data.success && ['push', 'pull', 'none'].includes(data.direction)) {
         setLastSync(Date.now());
       }
     });
@@ -165,9 +176,12 @@ export default function SyncPanel() {
     try {
       const { uid, user } = await signInWithPassword({ email, password });
       console.log('[Auth] UID:', uid);
+      const token = await getAccessToken();
+      if (!token?.accessToken) throw new Error('登录凭证获取失败，请重试');
       const bound = await api.authSetUid(uid, {
         username: user.email || email,
         isNewUser: false,
+        accessToken: token.accessToken,
       });
       if (!bound.success) throw new Error(bound.error || '同步引擎绑定失败');
 
@@ -203,9 +217,12 @@ export default function SyncPanel() {
     try {
       const { uid, user } = await signInWithEmailCode({ email, code, verification_id: verificationId });
       console.log('[Auth] UID:', uid);
+      const token = await getAccessToken();
+      if (!token?.accessToken) throw new Error('登录凭证获取失败，请重试');
       const bound = await api.authSetUid(uid, {
         username: user.email || email,
         isNewUser: false,
+        accessToken: token.accessToken,
       });
       if (!bound.success) throw new Error(bound.error || '同步引擎绑定失败');
 
@@ -282,6 +299,7 @@ export default function SyncPanel() {
         username: user.email || email,
         isNewUser: true,
         importLocalData,
+        accessToken: token.accessToken,
       });
       if (!bound.success) throw new Error(bound.error || '同步引擎绑定失败');
 

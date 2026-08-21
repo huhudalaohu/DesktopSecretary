@@ -12,7 +12,6 @@
 
 const { app, BrowserWindow, screen, ipcMain, dialog, globalShortcut } = require('electron');
 const path = require('path');
-const fs = require('fs');
 const os = require('os');
 
 const platform = require('./main/platform');
@@ -40,41 +39,6 @@ let windowManager = null;
 let screenshotManager = null;
 let shortcutManager = null;
 let autoUpdater = null;
-
-// ========== 腾讯云 CloudBase ==========
-let tcbApp = null;
-let tcbAuth = null;
-const TCB_ENV_ID = process.env.TCB_ENV_ID || 'ds-dev-d9g28xlrgd2600837';
-let TCB_SECRET_ID = process.env.TCB_SECRET_ID;
-let TCB_SECRET_KEY = process.env.TCB_SECRET_KEY;
-
-if (!TCB_SECRET_ID || !TCB_SECRET_KEY) {
-  try {
-    const configPath = path.join(__dirname, 'config', 'publish-config.json');
-    if (fs.existsSync(configPath)) {
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      TCB_SECRET_ID = config.secretId;
-      TCB_SECRET_KEY = config.secretKey;
-    }
-  } catch (err) {
-    console.warn('[CloudBase] 读取配置文件失败:', err.message);
-  }
-}
-
-if (TCB_SECRET_ID && TCB_SECRET_KEY) {
-  try {
-    const cloudbase = require('@cloudbase/node-sdk');
-    tcbApp = cloudbase.init({ env: TCB_ENV_ID, secretId: TCB_SECRET_ID, secretKey: TCB_SECRET_KEY });
-    tcbAuth = tcbApp.auth();
-    console.log('[CloudBase] 初始化成功');
-  } catch (err) {
-    console.error('[CloudBase] 初始化失败:', err.message);
-    tcbApp = null;
-    tcbAuth = null;
-  }
-} else {
-  console.warn('[CloudBase] 未配置 TCB_SECRET_ID / TCB_SECRET_KEY，同步功能已禁用');
-}
 
 // ========== 辅助函数 ==========
 const DEV_SERVER_URL = process.env.ELECTRON_RENDERER_URL || 'http://localhost:5173';
@@ -158,7 +122,7 @@ app.whenReady().then(async () => {
     storeManager = new StoreManager(electronStore);
 
     // 2. 初始化同步引擎
-    initSync(electronStore, tcbApp);
+    initSync(electronStore);
 
     // 3. 创建 Managers
     dockManager = new DockManager({ screen, getMainWindow, stateManager: storeManager });
